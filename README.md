@@ -66,9 +66,26 @@ pnpm typecheck
 pnpm test
 ```
 
-Running the environment (once the server milestone lands) needs an
-`ANTHROPIC_API_KEY` in `apps/server/.env`; the gateway is spawned automatically
-from the published `@mcp-gen-ui/mcp-server` package.
+### Bring your own key (BYOK)
+
+genui-canvas ships **no API key and no bundled provider**. You plug in your own
+LLM through a small provider interface, configured entirely by environment
+variables in `apps/server/.env` (gitignored — never committed, never shipped):
+
+```bash
+# Recommended zero-cost default: Google Gemini free tier
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your-own-free-key      # from https://aistudio.google.com/apikey
+
+# Or bring another provider — same interface, your key:
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=your-own-key
+```
+
+The gateway MCP server is spawned automatically from the published
+`@mcp-gen-ui/mcp-server` package — it is **LLM-free**, so it needs no key of its
+own. Deploying genui-canvas deploys only the code; each operator supplies their
+own LLM credentials at run time.
 
 ## Verification
 
