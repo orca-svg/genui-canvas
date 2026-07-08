@@ -3,6 +3,7 @@
 export const CONTRACTS_SCHEMA_VERSION = 1 as const;
 
 export * from "./gateway.js";
+export * from "./a2ui.js";
 export * from "./interaction-event.js";
 export * from "./catalog.js";
 export * from "./composition.js";
