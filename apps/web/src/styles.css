@@ -1,0 +1,113 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1a1a1a;
+}
+
+.app {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app__header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.app__intent {
+  color: #555;
+  margin: 4px 0 16px;
+}
+
+.scenarios {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.scenarios button,
+.controls button {
+  border: 1px solid #cfd4dc;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.scenarios button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+.canvas {
+  display: grid;
+  gap: 12px;
+}
+
+.genui-canvas-surfaces {
+  display: grid;
+  gap: 12px;
+}
+
+.genui-canvas-surfaces > * {
+  background: #fff;
+  border: 1px solid #e3e6ea;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.controls {
+  background: #fff;
+  border: 1px solid #e3e6ea;
+  border-radius: 12px;
+  padding: 16px;
+  position: sticky;
+  top: 16px;
+}
+
+.controls h2 {
+  font-size: 1rem;
+  margin: 0 0 12px;
+}
+
+.controls ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.controls li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  border-top: 1px solid #f0f1f4;
+  padding-top: 8px;
+}
+
+.controls li.is-hidden {
+  opacity: 0.5;
+}
+
+.controls__id {
+  flex: 1 1 100%;
+  font-size: 0.8rem;
+  color: #444;
+  font-weight: 600;
+}

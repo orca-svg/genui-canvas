@@ -10,8 +10,9 @@ cards — becomes an input that reshapes the interface?** The gateway supplies
 deterministic, auditable public-benefit data; genui-canvas turns that data into
 a surface the user and the model co-compose.
 
-> **Status:** pre-alpha, building toward the v1 minimal closed loop. This is a
-> companion project to the gateway and consumes its published npm packages
+> **Status:** v1 minimal closed loop complete — chat + pin/hide/expand/reorder +
+> composition points, with the `trace → composition` loop verified live. This is
+> a companion project to the gateway and consumes its published npm packages
 > (`@mcp-gen-ui/*`) — it does not fork the gateway.
 
 ## The core loop
@@ -86,6 +87,32 @@ The gateway MCP server is spawned automatically from the published
 `@mcp-gen-ui/mcp-server` package — it is **LLM-free**, so it needs no key of its
 own. Deploying genui-canvas deploys only the code; each operator supplies their
 own LLM credentials at run time.
+
+### Run it (3 minutes)
+
+```bash
+pnpm install && pnpm build
+
+# 1. Orchestrator (spawns the gateway over MCP stdio). Zero key = rule-based
+#    composition; add your own GEMINI_API_KEY to apps/server/.env for LLM.
+pnpm --filter @genui-canvas/server dev      # http://localhost:8787
+
+# 2. Web canvas (in another terminal)
+pnpm --filter @genui-canvas/web dev         # http://localhost:5180
+```
+
+Pick a scenario, then **pin / hide** a card — the canvas re-composes and you see
+the interaction reshape the UI.
+
+### See the loop without a browser
+
+```bash
+pnpm demo:replay "서울 대학생 지원"
+```
+
+Runs the same query with and without manipulations and prints the diff — the
+reproducible **manipulation-check**: the pinned card rises to the top and the
+hidden card is removed versus the control run.
 
 ## Verification
 

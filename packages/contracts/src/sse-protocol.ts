@@ -17,6 +17,17 @@ export const ServerEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("composition"),
     compositionId: z.string(),
     messages: z.array(A2uiMessageSchema),
+    // Card metadata so the shell can build its manipulable state (cardId ->
+    // entityId) without re-parsing the A2UI messages.
+    cards: z
+      .array(
+        z.object({
+          cardId: z.string(),
+          entityId: z.string().optional(),
+          componentType: z.string(),
+        }),
+      )
+      .default([]),
   }),
   // reserved for v2 incremental streaming; unused in v1
   z.object({

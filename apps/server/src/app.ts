@@ -56,6 +56,11 @@ export function createApp(deps: AppDeps) {
               kind: "composition",
               compositionId: randomUUID(),
               messages: result.messages,
+              cards: result.spec.cards.map((card) => ({
+                cardId: card.cardId,
+                entityId: card.entityRef?.entityId,
+                componentType: card.componentType,
+              })),
             }),
           });
         } else {
