@@ -10,6 +10,7 @@ import type { GatewayClient } from "./mcp/gateway-client.js";
 import type { ComposeCandidate, LlmProvider } from "./llm/provider.js";
 import { ToolResultCache } from "./composition/tool-cache.js";
 import { validateComposition } from "./composition/validate.js";
+import { enforcePinnedPreservation } from "./composition/enforce.js";
 import { expandComposition, type A2uiMessage } from "./composition/expand.js";
 
 export interface ComposerDeps {
@@ -74,6 +75,9 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
   const validation = validateComposition(raw, cache);
   if (!validation.ok) return { ok: false, errors: validation.errors };
 
-  const messages = expandComposition(validation.spec, cache);
-  return { ok: true, spec: validation.spec, messages };
+  // Stage 4: pinned-preservation is enforced server-side, so the provider
+  // cannot bury or drop a card the user pinned.
+  const spec = enforcePinnedPreservation(validation.spec, request.currentComposition, cache);
+  const messages = expandComposition(spec, cache);
+  return { ok: true, spec, messages };
 }

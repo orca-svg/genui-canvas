@@ -50,4 +50,39 @@ describe("composeTurn (live gateway + rule-based provider)", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors.join(" ")).toMatch(/made-up-benefit/);
   }, 30000);
+
+  it("keeps a pinned card first even when the provider ignores the pin (server enforcement)", async () => {
+    await gateway.connect();
+    // A provider that returns candidates in reverse score order (ignores pins).
+    const contrarian: LlmProvider = {
+      name: "contrarian",
+      async compose(req: ComposeRequest) {
+        const cards = [...req.candidates].reverse().map((cand) => ({
+          cardId: `card-${cand.entityId}`,
+          componentType: "BenefitCard",
+          entityRef: { toolResult: "searchBenefits", entityId: cand.entityId },
+          rationale: "무시",
+        }));
+        return { intentSummary: "무시", cards, order: cards.map((c) => c.cardId) };
+      },
+    };
+    const pinnedTurn = {
+      ...turn,
+      currentComposition: {
+        cards: [
+          {
+            cardId: "card-national-scholarship",
+            entityId: "national-scholarship",
+            componentType: "BenefitCard",
+            state: "pinned" as const,
+          },
+        ],
+      },
+    };
+    const result = await composeTurn({ gateway, provider: contrarian }, pinnedTurn);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.spec.order[0]).toBe("card-national-scholarship");
+    }
+  }, 30000);
 });

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { InteractionEventSchema } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
+import { summarizeTrace } from "./trace/summarize.js";
 import type { TraceStore } from "./trace/store.js";
 
 export interface AppDeps extends ComposerDeps {
@@ -35,14 +36,19 @@ export function createApp(deps: AppDeps) {
   });
 
   app.post("/api/turn", async (c) => {
-    const body = (await c.req.json()) as TurnRequest;
+    const body = (await c.req.json()) as TurnRequest & { sessionId?: string };
+    // Close the loop server-side: when a session is given, the trace summary is
+    // computed from the recorded interaction trace, not trusted from the client.
+    const turn: TurnRequest = body.sessionId
+      ? { ...body, traceSummary: summarizeTrace(deps.traceStore.read(body.sessionId)) }
+      : body;
     return streamSSE(c, async (stream) => {
       await stream.writeSSE({
         event: "status",
         data: JSON.stringify({ kind: "status", message: "게이트웨이에서 후보를 검색하고 구성 중" }),
       });
       try {
-        const result = await composeTurn(deps, body);
+        const result = await composeTurn(deps, turn);
         if (result.ok) {
           await stream.writeSSE({
             event: "composition",
