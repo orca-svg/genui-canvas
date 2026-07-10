@@ -68,6 +68,38 @@ body {
   border: 1px solid #e3e6ea;
   border-radius: 12px;
   padding: 16px;
+  transition: transform 140ms ease, box-shadow 140ms ease, outline-color 140ms ease;
+}
+
+/* 확대/축소: expanding a card emphasises it (enlarge + ring); collapsing
+   returns it to the normal size. Instant, no re-composition. */
+.genui-canvas-card[data-expanded="true"] {
+  transform: scale(1.02);
+  outline: 2px solid #3b6cf0;
+  outline-offset: 1px;
+  box-shadow: 0 6px 20px rgba(59, 108, 240, 0.16);
+  position: relative;
+  z-index: 1;
+}
+
+.controls__recompose {
+  width: 100%;
+  margin-bottom: 12px;
+  border: 1px solid #3b6cf0;
+  background: #3b6cf0;
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.controls__recompose:disabled {
+  opacity: 0.45;
+  cursor: default;
+  border-color: #cfd4dc;
+  background: #eef0f4;
+  color: #7a808b;
 }
 
 .controls {
@@ -84,30 +116,14 @@ body {
   margin: 0 0 12px;
 }
 
-.controls ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
+.controls__cards {
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
-.controls li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  border-top: 1px solid #f0f1f4;
-  padding-top: 8px;
-}
-
-.controls li.is-hidden {
-  opacity: 0.5;
-}
-
-.controls__id {
-  flex: 1 1 100%;
-  font-size: 0.8rem;
-  color: #444;
-  font-weight: 600;
+/* Let each Attachment chip span the sidebar width instead of hugging content. */
+.controls__cards > [data-slot="attachment"] {
+  width: 100%;
+  max-width: 100%;
 }

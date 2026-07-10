@@ -8,6 +8,7 @@ import {
 } from "./state/shell-store.js";
 import { deriveInteractionEvent } from "./state/interaction-log.js";
 import { createSession, postEvent, postTurn, type TurnBody } from "./api/client.js";
+import { CardFrame } from "./components/CardFrame.js";
 
 interface Scenario {
   label: string;
@@ -74,8 +75,17 @@ export function App() {
   const [messages, setMessages] = useState<A2uiMessages>([] as unknown as A2uiMessages);
   const [intent, setIntent] = useState("검색어를 입력하거나 시나리오를 선택하세요.");
   const [busy, setBusy] = useState(false);
+  // Manipulations applied since the last composition — the trace the next
+  // composition point will fold in.
+  const [dirty, setDirty] = useState(false);
   const scenarioRef = useRef<Scenario>(SCENARIOS[0]!);
   const seqRef = useRef(0);
+
+  // The canvas follows the shell instantly: shell order (pinned first), hidden
+  // cards dropped, expanded flag passed through — no server round-trip.
+  const layout = shell.cards
+    .filter((c) => !c.hidden)
+    .map((c) => ({ cardId: c.cardId, expanded: c.expanded }));
 
   useEffect(() => {
     createSession().then(setSessionId).catch(() => setIntent("서버에 연결할 수 없습니다 (pnpm dev 로 서버를 켜세요)."));
@@ -97,6 +107,7 @@ export function App() {
       if (composition && composition.kind === "composition") {
         setMessages(composition.messages as unknown as A2uiMessages);
         setShell(mergeShell(current, composition.compositionId, composition.cards));
+        setDirty(false);
         setIntent(`${composition.cards.length}개 카드를 구성했습니다.`);
       } else if (error && error.kind === "error") {
         setIntent(`구성 실패: ${error.message}`);
@@ -113,15 +124,25 @@ export function App() {
     void runTurn(scenario, fresh);
   }
 
-  async function manipulate(action: ShellAction) {
+  // Fine-grained manipulation: applies instantly in the shell (the canvas
+  // reorders/hides/expands with no round-trip) and is logged. It does NOT
+  // re-compose — that is reserved for composition points, so scroll position
+  // and focus are preserved.
+  function manipulate(action: ShellAction) {
     const before = shell;
     const after = shellReducer(before, action);
     setShell(after);
+    setDirty(true);
+    setIntent("조작이 즉시 반영됐어요 · ‘조작 반영해 재구성’으로 추천을 갱신할 수 있어요.");
     if (sessionId) {
-      await postEvent(deriveInteractionEvent(action, before, { sessionId, seq: seqRef.current++ }));
+      void postEvent(deriveInteractionEvent(action, before, { sessionId, seq: seqRef.current++ }));
     }
-    // Re-compose so the manipulation reshapes the UI (trace -> composition).
-    await runTurn(scenarioRef.current, after);
+  }
+
+  // Composition point: re-run the LLM composition folding in the accumulated
+  // interaction trace (server computes the trace summary from the log).
+  function recompose() {
+    void runTurn(scenarioRef.current, shell);
   }
 
   return (
@@ -141,28 +162,33 @@ export function App() {
 
       <div className="layout">
         <section className="canvas" aria-label="추천 결과">
-          <CanvasSurfaces messages={messages} />
+          <CanvasSurfaces messages={messages} layout={layout} />
         </section>
 
         <aside className="controls" aria-label="카드 조작">
           <h2>카드 조작</h2>
           {shell.cards.length === 0 && <p>시나리오를 선택하면 카드가 나타납니다.</p>}
-          <ul>
+          {shell.cards.length > 0 && (
+            <button
+              className="controls__recompose"
+              disabled={busy || !dirty}
+              onClick={recompose}
+            >
+              조작 반영해 재구성
+            </button>
+          )}
+          <div className="controls__cards">
             {shell.cards.map((card) => (
-              <li key={card.cardId} className={card.hidden ? "is-hidden" : ""}>
-                <span className="controls__id">{card.entityId ?? card.cardId}</span>
-                <button onClick={() => manipulate({ type: card.pinned ? "card.unpin" : "card.pin", cardId: card.cardId })}>
-                  {card.pinned ? "고정 해제" : "고정"}
-                </button>
-                <button onClick={() => manipulate({ type: card.hidden ? "card.unhide" : "card.hide", cardId: card.cardId })}>
-                  {card.hidden ? "다시 보기" : "숨기기"}
-                </button>
-                <button onClick={() => manipulate({ type: card.expanded ? "card.collapse" : "card.expand", cardId: card.cardId })}>
-                  {card.expanded ? "접기" : "펼치기"}
-                </button>
-              </li>
+              <CardFrame
+                key={card.cardId}
+                card={card}
+                busy={busy}
+                onPin={() => manipulate({ type: card.pinned ? "card.unpin" : "card.pin", cardId: card.cardId })}
+                onHide={() => manipulate({ type: card.hidden ? "card.unhide" : "card.hide", cardId: card.cardId })}
+                onExpand={() => manipulate({ type: card.expanded ? "card.collapse" : "card.expand", cardId: card.cardId })}
+              />
             ))}
-          </ul>
+          </div>
         </aside>
       </div>
     </main>
