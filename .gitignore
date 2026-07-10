@@ -18,6 +18,7 @@ data/sessions/
 
 # Mirrored local-only agent harness (same policy as .claude/ — never commit)
 .agents/
+.Codex/
 AGENTS.md
 
 # Local status / handoff notes (personal, not part of the repo)

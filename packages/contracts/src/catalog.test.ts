@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CATALOG_TOOL_RESULT_BY_COMPONENT,
   CATALOG_COMPONENT_TYPES,
   CatalogComponentTypeSchema,
   validateCatalogProps,
@@ -15,6 +16,17 @@ describe("catalog registry", () => {
   it("enum schema rejects an unlisted component", () => {
     expect(CatalogComponentTypeSchema.safeParse("BenefitCard").success).toBe(true);
     expect(CatalogComponentTypeSchema.safeParse("RawHtml").success).toBe(false);
+  });
+
+  it("publishes the gateway result that supplies each semantic component", () => {
+    expect(CATALOG_TOOL_RESULT_BY_COMPONENT).toEqual({
+      BenefitCard: "searchBenefits",
+      ScoreBreakdown: "searchBenefits",
+      Checklist: "buildChecklist",
+      DeadlineList: "getUpcomingDeadlines",
+      PersonaSelector: "listPersonas",
+      SourceNotice: "getBenefitDetail",
+    });
   });
 });
 

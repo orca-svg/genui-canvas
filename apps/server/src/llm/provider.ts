@@ -1,17 +1,27 @@
-import type { CompositionContext, EntityRef } from "@genui-canvas/contracts";
+import type {
+  CatalogComponentType,
+  CompositionContext,
+  EntityRef,
+} from "@genui-canvas/contracts";
 
 export interface ComposeCandidate {
   toolResult: EntityRef["toolResult"];
   entityId: string;
-  title: string;
   category: string;
   score: number;
   status: string;
 }
 
+/** A validated cache reference the provider may safely select for one component. */
+export interface ComposeResource {
+  componentType: CatalogComponentType;
+  entityRef: EntityRef;
+}
+
 export interface ComposeRequest {
   context: CompositionContext;
   candidates: ComposeCandidate[];
+  resources: ComposeResource[];
 }
 
 /**
@@ -35,17 +45,26 @@ export class RuleBasedProvider implements LlmProvider {
   async compose(request: ComposeRequest): Promise<unknown> {
     const pinned = new Set<string>();
     const hidden = new Set<string>();
-    for (const card of request.context.currentComposition.cards) {
+    const manualOrder = new Map<string, number>();
+    for (const [index, card] of request.context.currentComposition.cards.entries()) {
       if (!card.entityId) continue;
-      if (card.state === "pinned") pinned.add(card.entityId);
-      if (card.state === "hidden") hidden.add(card.entityId);
+      manualOrder.set(card.entityId, index);
+      if (card.pinned) pinned.add(card.entityId);
+      if (card.hidden) hidden.add(card.entityId);
     }
+    const userReordered = request.context.traceSummary.orderingSignal?.userReordered === true;
 
     const ordered = request.candidates
       .filter((candidate) => !hidden.has(candidate.entityId))
       .sort((a, b) => {
         const pinnedDelta = Number(pinned.has(b.entityId)) - Number(pinned.has(a.entityId));
         if (pinnedDelta !== 0) return pinnedDelta;
+        if (userReordered) {
+          const orderDelta =
+            (manualOrder.get(a.entityId) ?? Number.MAX_SAFE_INTEGER) -
+            (manualOrder.get(b.entityId) ?? Number.MAX_SAFE_INTEGER);
+          if (orderDelta !== 0) return orderDelta;
+        }
         return b.score - a.score;
       });
 
@@ -57,11 +76,13 @@ export class RuleBasedProvider implements LlmProvider {
       emphasis: index === 0 ? ("primary" as const) : ("secondary" as const),
       rationale: pinned.has(candidate.entityId)
         ? "사용자가 고정한 카드입니다."
-        : `적합도 ${Math.round(candidate.score * 100)}% 기준으로 정렬했습니다.`,
+        : userReordered && manualOrder.has(candidate.entityId)
+          ? "사용자가 조정한 카드 순서를 유지했습니다."
+        : `상대 관련도 ${Math.round(candidate.score * 100)}/100 기준으로 정렬했습니다(자격 확률 아님).`,
     }));
 
     return {
-      intentSummary: `${cards.length}개 후보를 적합도와 사용자 조작을 반영해 구성했습니다.`,
+      intentSummary: `${cards.length}개 후보를 상대 관련도와 사용자 조작을 반영해 구성했습니다.`,
       cards,
       order: cards.map((card) => card.cardId),
     };

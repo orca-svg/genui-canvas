@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useLayoutEffect, useMemo } from "react";
 import { A2uiSurface, MarkdownContext } from "@a2ui/react/v0_9";
 import { createProcessor, type A2uiMessages } from "./processor.js";
 
@@ -50,7 +50,7 @@ export function CanvasSurfaces({ messages, layout }: CanvasSurfacesProps) {
     Array.from(processor.model.surfacesMap.values()),
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const sync = () => setSurfaces(Array.from(processor.model.surfacesMap.values()));
     // createProcessor() processed the messages synchronously, so any surfaces
     // already exist before we subscribe — pick them up now, then track changes.
@@ -78,11 +78,14 @@ export function CanvasSurfaces({ messages, layout }: CanvasSurfacesProps) {
         {ordered.map(({ surface, expanded }) => (
           <div
             key={surface.id}
+            id={`canvas-card-${surface.id}`}
             className="genui-canvas-card"
             data-card-id={surface.id}
             data-expanded={expanded ? "true" : "false"}
           >
-            <A2uiSurface surface={surface} />
+            <div className="genui-canvas-card__body">
+              <A2uiSurface surface={surface} />
+            </div>
           </div>
         ))}
       </div>

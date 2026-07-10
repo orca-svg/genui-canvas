@@ -18,9 +18,34 @@ function card(overrides: Partial<ShellCard> = {}): ShellCard {
 const noop = () => {};
 
 describe("CardFrame", () => {
-  it("shows the entity id as the title", () => {
-    render(<CardFrame card={card()} busy={false} onPin={noop} onHide={noop} onExpand={noop} />);
+  it("prefers a human-readable title and falls back to the entity id", () => {
+    const { rerender } = render(
+      <CardFrame card={card({ title: "서울 청년 월세지원" })} busy={false} onPin={noop} onHide={noop} onExpand={noop} />,
+    );
+    expect(screen.getByText("서울 청년 월세지원")).toBeInTheDocument();
+
+    rerender(<CardFrame card={card()} busy={false} onPin={noop} onHide={noop} onExpand={noop} />);
     expect(screen.getByText("seoul-youth-rent-support")).toBeInTheDocument();
+  });
+
+  it("offers the exact HTTPS source returned through trusted card metadata", () => {
+    render(
+      <CardFrame
+        card={card({
+          title: "서울 청년 월세지원",
+          sourceUrl: "https://youth.seoul.go.kr/support",
+          sourceCheckedAt: "2026-07-10T00:00:00.000Z",
+        })}
+        busy={false}
+        onPin={noop}
+        onHide={noop}
+        onExpand={noop}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "서울 청년 월세지원 출처 페이지 열기" });
+    expect(link).toHaveAttribute("href", "https://youth.seoul.go.kr/support");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("maps a recomposing turn to the processing (shimmer) state", () => {
@@ -31,6 +56,9 @@ describe("CardFrame", () => {
       "data-state",
       "processing",
     );
+    expect(screen.getByRole("button", { name: "seoul-youth-rent-support 고정" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "seoul-youth-rent-support 숨기기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "seoul-youth-rent-support 펼치기" })).toBeDisabled();
   });
 
   it("maps a settled visible card to the done state", () => {
@@ -51,6 +79,9 @@ describe("CardFrame", () => {
       "data-state",
       "idle",
     );
+    const expand = screen.getByRole("button", { name: "seoul-youth-rent-support 펼치기" });
+    expect(expand).toBeDisabled();
+    expect(expand).not.toHaveAttribute("aria-controls");
   });
 
   it("reflects the pinned flag on its pin action", () => {
@@ -76,5 +107,14 @@ describe("CardFrame", () => {
     await user.click(screen.getByRole("button", { name: /숨기기/ }));
     await user.click(screen.getByRole("button", { name: /펼치기/ }));
     expect([pinned, hidden, expanded]).toEqual([1, 1, 1]);
+  });
+
+  it("links the expand control to its canvas region with the expanded state", () => {
+    render(
+      <CardFrame card={card({ expanded: true })} busy={false} onPin={noop} onHide={noop} onExpand={noop} />,
+    );
+    const control = screen.getByRole("button", { name: "seoul-youth-rent-support 접기" });
+    expect(control).toHaveAttribute("aria-controls", "canvas-card-c1");
+    expect(control).toHaveAttribute("aria-expanded", "true");
   });
 });

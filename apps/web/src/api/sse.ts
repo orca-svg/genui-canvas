@@ -7,16 +7,19 @@ import { ServerEventSchema, type ServerEvent } from "@genui-canvas/contracts";
  */
 export function parseSSE(text: string): ServerEvent[] {
   const events: ServerEvent[] = [];
-  for (const block of text.split("\n\n")) {
-    const dataLine = block
-      .split("\n")
+  for (const block of text.replace(/\r\n/g, "\n").split("\n\n")) {
+    const lines = block.split("\n");
+    const eventName = lines.find((line) => line.startsWith("event:"))?.slice("event:".length).trim();
+    const dataLine = lines
       .find((line) => line.startsWith("data:"));
     if (!dataLine) continue;
     const json = dataLine.slice("data:".length).trim();
     if (!json) continue;
     try {
       const parsed = ServerEventSchema.safeParse(JSON.parse(json));
-      if (parsed.success) events.push(parsed.data);
+      if (parsed.success && (!eventName || eventName === parsed.data.kind)) {
+        events.push(parsed.data);
+      }
     } catch {
       // skip malformed frame
     }

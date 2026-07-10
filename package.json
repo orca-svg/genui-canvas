@@ -13,7 +13,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "pnpm -r --if-present lint",
+    "lint": "pnpm typecheck && node --test scripts/safety-policy.test.mjs && node scripts/verify-safety.mjs",
+    "verify": "pnpm lint && pnpm test && pnpm build && pnpm demo:replay",
     "dev": "pnpm --parallel --filter \"./apps/*\" dev",
     "demo:replay": "pnpm --filter @genui-canvas/server demo:replay"
   },

@@ -7,7 +7,10 @@
 export interface ShellCard {
   cardId: string;
   entityId?: string;
-  componentType: string;
+  componentType: CatalogComponentType;
+  title?: string;
+  sourceUrl?: string;
+  sourceCheckedAt?: string;
   pinned: boolean;
   hidden: boolean;
   expanded: boolean;
@@ -21,7 +24,10 @@ export interface ShellState {
 export interface ShellCardInit {
   cardId: string;
   entityId?: string;
-  componentType: string;
+  componentType: CatalogComponentType;
+  title?: string;
+  sourceUrl?: string;
+  sourceCheckedAt?: string;
 }
 
 export type ShellAction =
@@ -101,3 +107,4 @@ export function shellReducer(state: ShellState, action: ShellAction): ShellState
       return withPinnedTop(moveCard(state, action.cardId, action.toIndex));
   }
 }
+import type { CatalogComponentType } from "@genui-canvas/contracts";

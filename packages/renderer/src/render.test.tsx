@@ -70,37 +70,43 @@ describe("CanvasSurfaces", () => {
     { version: "v0.9", updateDataModel: { surfaceId: "card-2", path: "/", value: { t: "둘째" } } },
   ];
 
-  it("renders cards in the layout order, not the message order", () => {
+  it("renders cards in the layout order, not the message order", async () => {
     const { container } = render(
       <CanvasSurfaces messages={twoCards} layout={[{ cardId: "card-2" }, { cardId: "card-1" }]} />,
     );
+    await screen.findByText("둘째");
     const ids = [...container.querySelectorAll(".genui-canvas-card")].map((el) =>
       el.getAttribute("data-card-id"),
     );
     expect(ids).toEqual(["card-2", "card-1"]);
   });
 
-  it("omits cards missing from the layout (hidden)", () => {
+  it("omits cards missing from the layout (hidden)", async () => {
     const { container } = render(
       <CanvasSurfaces messages={twoCards} layout={[{ cardId: "card-1" }]} />,
     );
+    await screen.findByText("첫째");
     const ids = [...container.querySelectorAll(".genui-canvas-card")].map((el) =>
       el.getAttribute("data-card-id"),
     );
     expect(ids).toEqual(["card-1"]);
   });
 
-  it("marks expanded cards via data-expanded", () => {
+  it("marks expanded cards via data-expanded", async () => {
     const { container } = render(
       <CanvasSurfaces
         messages={twoCards}
         layout={[{ cardId: "card-1", expanded: true }, { cardId: "card-2", expanded: false }]}
       />,
     );
+    await screen.findByText("첫째");
+    await screen.findByText("둘째");
     const card1 = container.querySelector('[data-card-id="card-1"]');
     const card2 = container.querySelector('[data-card-id="card-2"]');
     expect(card1).toHaveAttribute("data-expanded", "true");
+    expect(card1).toHaveAttribute("id", "canvas-card-card-1");
     expect(card2).toHaveAttribute("data-expanded", "false");
+    expect(card1?.querySelector(".genui-canvas-card__body")).toBeInTheDocument();
   });
 
   it("renders surfaces when messages arrive after mount", async () => {
