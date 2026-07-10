@@ -59,6 +59,30 @@ describe("POST /api/events", () => {
   });
 });
 
+describe("CORS", () => {
+  // The web SPA (:5180) calls the API (:8787) cross-origin, per the README
+  // quickstart. Without CORS the browser blocks every request.
+  it("allows a cross-origin browser request", async () => {
+    const res = await app.request("/api/session", {
+      method: "POST",
+      headers: { origin: "http://localhost:5180" },
+    });
+    expect(res.headers.get("access-control-allow-origin")).toBeTruthy();
+  });
+
+  it("answers the preflight for /api/turn", async () => {
+    const res = await app.request("/api/turn", {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:5180",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(res.status).toBeLessThan(300);
+    expect(res.headers.get("access-control-allow-origin")).toBeTruthy();
+  });
+});
+
 describe("POST /api/turn", () => {
   it("streams a composition with A2UI surfaces", async () => {
     const res = await app.request("/api/turn", {

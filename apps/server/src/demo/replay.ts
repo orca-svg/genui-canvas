@@ -1,6 +1,11 @@
+import { loadDotenv } from "../config/env.js";
 import { GatewayClient } from "../mcp/gateway-client.js";
 import { createProvider } from "../llm/factory.js";
 import { runManipulationCheck } from "./manipulation-check.js";
+
+// BYOK: load the operator's key so demo:replay can run live (Gemini) or offline
+// (rule-based) depending on apps/server/.env.
+loadDotenv();
 
 /**
  * Live manipulation-check CLI. Runs the same query with and without card

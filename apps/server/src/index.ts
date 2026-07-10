@@ -1,9 +1,14 @@
 import { serve } from "@hono/node-server";
 import { join } from "node:path";
+import { loadDotenv } from "./config/env.js";
 import { GatewayClient } from "./mcp/gateway-client.js";
 import { createProvider } from "./llm/factory.js";
 import { TraceStore } from "./trace/store.js";
 import { createApp } from "./app.js";
+
+// BYOK: pull the operator's own key from apps/server/.env before we select a
+// provider. No key => rule-based (zero config).
+loadDotenv();
 
 const gateway = new GatewayClient();
 await gateway.connect();

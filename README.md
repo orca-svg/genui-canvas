@@ -77,6 +77,7 @@ variables in `apps/server/.env` (gitignored — never committed, never shipped):
 # Recommended zero-cost default: Google Gemini free tier
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-own-free-key      # from https://aistudio.google.com/apikey
+GEMINI_MODEL=gemini-flash-latest      # tracks current stable flash (pinned versions get retired)
 
 # Or bring another provider — same interface, your key:
 # LLM_PROVIDER=anthropic

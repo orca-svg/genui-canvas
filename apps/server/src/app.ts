@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { InteractionEventSchema } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
@@ -19,6 +20,12 @@ export interface AppDeps extends ComposerDeps {
 export function createApp(deps: AppDeps) {
   const app = new Hono();
   const sessions = new Map<string, { seq: number }>();
+
+  // The SPA is served from a different origin (Vite :5180) than this API
+  // (:8787), so the browser needs CORS to talk to it. Local BYOK tool — a
+  // permissive dev policy is fine; tighten via a real origin allowlist if you
+  // deploy the API publicly.
+  app.use("/api/*", cors());
 
   app.post("/api/session", (c) => {
     const sessionId = randomUUID();
