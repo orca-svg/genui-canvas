@@ -11,9 +11,10 @@ const baseRequest = (overrides: Partial<ComposeRequest["context"]> = {}): Compos
     ...overrides,
   },
   candidates: [
-    { toolResult: "searchBenefits", entityId: "a", title: "국가장학금", category: "education", score: 0.9, status: "candidate" },
-    { toolResult: "searchBenefits", entityId: "b", title: "월세 지원", category: "housing", score: 0.6, status: "candidate" },
+    { toolResult: "searchBenefits", entityId: "a", category: "education", score: 0.9, status: "candidate" },
+    { toolResult: "searchBenefits", entityId: "b", category: "housing", score: 0.6, status: "candidate" },
   ],
+  resources: [],
 });
 
 describe("RuleBasedProvider", () => {
@@ -34,7 +35,7 @@ describe("RuleBasedProvider", () => {
   it("places a pinned card first even when it has a lower score", async () => {
     const req = baseRequest({
       currentComposition: {
-        cards: [{ cardId: "card-b", entityId: "b", componentType: "BenefitCard", state: "pinned" }],
+        cards: [{ cardId: "card-b", entityId: "b", componentType: "BenefitCard", pinned: true, hidden: false, expanded: false }],
       },
     });
     const raw = (await new RuleBasedProvider().compose(req)) as {
@@ -46,13 +47,34 @@ describe("RuleBasedProvider", () => {
   it("drops a hidden candidate from the composition", async () => {
     const req = baseRequest({
       currentComposition: {
-        cards: [{ cardId: "card-b", entityId: "b", componentType: "BenefitCard", state: "hidden" }],
+        cards: [{ cardId: "card-b", entityId: "b", componentType: "BenefitCard", pinned: false, hidden: true, expanded: false }],
       },
     });
     const raw = (await new RuleBasedProvider().compose(req)) as {
       cards: Array<{ entityRef: { entityId: string } }>;
     };
     expect(raw.cards.map((c) => c.entityRef.entityId)).toEqual(["a"]);
+  });
+
+  it("preserves an explicit user reorder when the trace reports a reorder", async () => {
+    const req = baseRequest({
+      currentComposition: {
+        cards: [
+          { cardId: "card-b", entityId: "b", componentType: "BenefitCard", pinned: false, hidden: false, expanded: false },
+          { cardId: "card-a", entityId: "a", componentType: "BenefitCard", pinned: false, hidden: false, expanded: false },
+        ],
+      },
+      traceSummary: {
+        entityEngagement: [],
+        orderingSignal: { userReordered: true, topThreeEntityIds: ["b", "a"] },
+        recentEvents: ["user card.reorder b"],
+        turnCount: 1,
+      },
+    });
+    const raw = (await new RuleBasedProvider().compose(req)) as {
+      cards: Array<{ entityRef: { entityId: string } }>;
+    };
+    expect(raw.cards.map((card) => card.entityRef.entityId)).toEqual(["b", "a"]);
   });
 
   it("is deterministic", async () => {

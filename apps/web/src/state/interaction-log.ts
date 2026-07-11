@@ -4,6 +4,7 @@ import { visibleCardIds, type ShellAction, type ShellState } from "./shell-store
 export interface EventMeta {
   sessionId: string;
   seq: number;
+  triggeredBy?: string;
 }
 
 /**
@@ -35,5 +36,59 @@ export function deriveInteractionEvent(
       compositionId: stateBefore.compositionId,
       visibleCardIds: visibleCardIds(stateBefore),
     },
+  });
+}
+
+export function deriveCompositionPointEvent(
+  trigger: { type: "query.submit"; text: string } | { type: "persona.switch"; personaId: string },
+  stateBefore: ShellState,
+  meta: EventMeta,
+): InteractionEvent {
+  return createInteractionEvent({
+    sessionId: meta.sessionId,
+    seq: meta.seq,
+    actor: "user",
+    type: trigger.type,
+    payload: trigger.type === "query.submit" ? { text: trigger.text } : { personaId: trigger.personaId },
+    context: {
+      compositionId: stateBefore.compositionId,
+      visibleCardIds: visibleCardIds(stateBefore),
+    },
+  });
+}
+
+export function deriveCompositionAppliedEvent(
+  stateAfter: ShellState,
+  meta: EventMeta,
+): InteractionEvent {
+  return createInteractionEvent({
+    sessionId: meta.sessionId,
+    seq: meta.seq,
+    actor: "system",
+    type: "composition.applied",
+    context: {
+      compositionId: stateAfter.compositionId,
+      visibleCardIds: visibleCardIds(stateAfter),
+    },
+    causality: meta.triggeredBy ? { triggeredBy: meta.triggeredBy } : undefined,
+  });
+}
+
+export function deriveCompositionRejectedEvent(
+  stateBefore: ShellState,
+  reason: "turn_failed" | "composition_invalid",
+  meta: EventMeta,
+): InteractionEvent {
+  return createInteractionEvent({
+    sessionId: meta.sessionId,
+    seq: meta.seq,
+    actor: "system",
+    type: "composition.rejected",
+    payload: { reason },
+    context: {
+      compositionId: stateBefore.compositionId,
+      visibleCardIds: visibleCardIds(stateBefore),
+    },
+    causality: meta.triggeredBy ? { triggeredBy: meta.triggeredBy } : undefined,
   });
 }

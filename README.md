@@ -1,133 +1,178 @@
 # genui-canvas
 
-**Interaction-driven generative UI environment** for the
-[`mcp-gen-ui-gateway`](https://github.com/orca-svg/mcp-gateway-genui) public-benefit MCP server.
+Interaction-driven generative UI for the
+[`orca-svg/mcp-gateway-genui`](https://github.com/orca-svg/mcp-gateway-genui)
+public-benefit MCP gateway.
 
-Most "generative UI" today means *the model writes text and maybe picks a
-component*. genui-canvas asks a sharper question: **what if every
-interaction — not just chat, but pinning, hiding, expanding, reordering
-cards — becomes an input that reshapes the interface?** The gateway supplies
-deterministic, auditable public-benefit data; genui-canvas turns that data into
-a surface the user and the model co-compose.
+The gateway remains deterministic and LLM-free. `genui-canvas` searches its
+typed benefit data, lets a provider select from a strict semantic card catalog,
+expands the selection into a bounded A2UI message subset, and gives the user
+immediate control over the resulting canvas.
 
-> **Status:** v1 minimal closed loop complete — chat + pin/hide/expand/reorder +
-> composition points, with the `trace → composition` loop verified live. This is
-> a companion project to the gateway and consumes its published npm packages
-> (`@mcp-gen-ui/*`) — it does not fork the gateway.
+> **Current status: fixture-backed research prototype.** The installed
+> `@mcp-gen-ui/mcp-server@0.3.0` entry is started in explicit fixture mode for
+> deterministic local verification. Results are
+> candidates, not eligibility decisions; relative relevance scores are not
+> probabilities. Links are labeled official only from the gateway's structured
+> exact-origin verification metadata, with health and freshness shown separately.
+> Do not use this build for
+> production benefit coverage or automated applications.
 
-## The core loop
+## Interaction model
 
-genui-canvas uses a **composition-point hybrid** adaptation model:
+- A query submit or persona switch is a **composition point**. The server calls
+  the gateway and then the selected rule-based or BYOK provider.
+- Pin, hide, preview/expand, keyboard reorder, and their undo/redo are
+  deterministic local operations. They do not call a model or wait for the
+  network.
+- Every accepted action is a bounded, structured event. The next composition
+  reads a server-derived trace; the client cannot replace that summary.
+- Server invariants preserve hidden, pinned, and explicitly reordered cards
+  even when a provider ignores the user's manipulation.
+- Failed recomposition keeps the previous canvas and records a
+  `composition.rejected` event when the trace endpoint remains available.
 
-- **Composition points** (a new query, a persona switch) are the only moments
-  the LLM (re)composes the UI. It emits a constrained declarative spec, not raw
-  markup.
-- **Fine-grained manipulations** (pin / hide / expand / reorder) apply
-  **deterministically and instantly** in the shell, and are structured-logged.
-- The **accumulated interaction trace** feeds the *next* composition — so the
-  UI adapts to how you actually used it (`trace → composition`).
+The model does not write markup or URLs. It sees only opaque IDs, enums, ranks,
+relative scores, allowed component references, and bounded trace flags. Raw
+query text, profile strings, benefit titles/summaries, and URLs remain outside
+the model instruction channel and are joined after strict validation.
 
-The gateway stays **LLM-free**; the intelligence lives here, outside it. The LLM
-never hand-writes UI: it selects from a **trusted component catalog** (Google
-[A2UI](https://github.com/google/A2UI) declarative JSON — "safe like data,
-expressive like code"), and the server deterministically expands the spec with
-real tool-result data. Recommendations remain **candidates, not eligibility
-decisions**, and no sensitive identifiers, logins, or submissions are ever
-handled.
+## Trusted semantic catalog
+
+| Component | Trusted gateway result | Purpose |
+| --- | --- | --- |
+| `BenefitCard` | `searchBenefits` | Candidate summary, status, relative score, reasons, missing information |
+| `ScoreBreakdown` | `searchBenefits` | Transparent relative-ranking dimensions |
+| `Checklist` | `buildChecklist` | Required/optional preparation items and caveats |
+| `DeadlineList` | `getUpcomingDeadlines` | Dated candidate deadlines with uncertainty intact |
+| `PersonaSelector` | `listPersonas` | Visible ranking-weight presets; never an eligibility switch |
+| `SourceNotice` | `getBenefitDetail` | Source observation, freshness, verified-link health, and user-verification notice |
+
+The deterministic expander emits only A2UI v0.9 `Column` and `Text` primitives.
+The wire contract rejects unknown catalogs/components before rendering, and all
+display text is HTML-escaped. The repository intentionally pins v0.9 because
+that is what its installed renderer supports; [A2UI v0.9.1 is the current
+production release](https://a2ui.org/), so an upgrade requires an explicit
+cross-package protocol test.
 
 ## Architecture
 
-```
-apps/web (Vite SPA)                    apps/server (Hono orchestrator)
-  ├─ shell: CardFrame                    ├─ mcp/gateway-client ─▶ @mcp-gen-ui/mcp-server (stdio)
-  │   (pin/hide/expand/reorder)          ├─ llm/composer (Anthropic tool-use loop)
-  ├─ chat + persona switch               ├─ composition/{validate,expand,tool-cache}
-  └─ SSE client ◀──────── SSE ───────────┤   (CompositionSpec → A2UI messages)
-                                         └─ trace/{store,summarize}  (InteractionEvent JSONL)
-        packages/renderer (A2UI catalog)     packages/contracts (shared types)
+```text
+apps/web (Vite + React)               apps/server (Hono)
+  ├─ query + persona controls           ├─ server-issued session / strict event API
+  ├─ deterministic shell reducer        ├─ MCP stdio client ─▶ @mcp-gen-ui/mcp-server
+  ├─ accessible CardFrame controls      ├─ strict output cache + semantic projection
+  └─ validated SSE/A2UI client ◀────────┤─ rule-based or BYOK Gemini provider
+                                        └─ trace store + server-side summarizer
+
+packages/contracts                     packages/renderer
+  ├─ strict Zod domain/wire schemas      ├─ A2UI v0.9 processor
+  └─ gateway package re-exports          └─ escaped basic-catalog rendering
 ```
 
-## Monorepo layout
-
-| Package | Responsibility |
-| --- | --- |
-| `@genui-canvas/contracts` | Shared Zod contracts: `InteractionEvent`, `CompositionSpec`/`CompositionContext`, component catalog schemas, A2UI message types, SSE protocol. |
-| `@genui-canvas/renderer` | Domain component catalog (BenefitCard, ScoreBreakdown, Checklist, DeadlineList, PersonaSelector) rendered via A2UI, with a fallback renderer consuming the same messages. |
-| `apps/web` | Vite + React shell: card manipulation, chat, persona switch, SSE client, interaction logging. |
-| `apps/server` | Hono orchestrator: MCP gateway client, LLM composer, composition validation/expansion, interaction-trace store. |
+The canvas consumes the gateway's published npm packages; it does not fork or
+modify the gateway repository. The original v0.3 producer acceptance handoff is
+retained in [`docs/gateway-requirements.md`](docs/gateway-requirements.md).
 
 ## Quick start
 
-Requires **Node.js >= 22.5** and pnpm.
+Requirements: Node.js `>=22.5` and pnpm `10.17.1`.
 
 ```bash
-pnpm install
-pnpm build
-pnpm typecheck
-pnpm test
+pnpm install --frozen-lockfile
+pnpm verify
 ```
 
-### Bring your own key (BYOK)
+`pnpm verify` performs real type/static safety checks, all tests, production
+builds, and the deterministic HTTP trace replay. Tests spawn the published
+fixture gateway over local MCP stdio; they make no external data request and
+need no LLM key.
 
-genui-canvas ships **no API key and no bundled provider**. You plug in your own
-LLM through a small provider interface, configured entirely by environment
-variables in `apps/server/.env` (gitignored — never committed, never shipped):
+Run the application in two terminals:
 
 ```bash
-# Recommended zero-cost default: Google Gemini free tier
+# Terminal 1 — Hono orchestrator on http://localhost:8787
+pnpm --filter @genui-canvas/server dev
+
+# Terminal 2 — Vite SPA on http://localhost:5180
+pnpm --filter @genui-canvas/web dev
+```
+
+Enter a benefit query or use a sample scenario. Manipulate cards locally, then
+select **조작 반영해 재구성** to pass the persisted trace into the next
+composition.
+
+## Provider configuration (BYOK)
+
+No key is committed or bundled. With no configuration the server uses the
+deterministic rule-based provider. To opt into Gemini, copy
+`apps/server/.env.example` to the gitignored `apps/server/.env`:
+
+```dotenv
 LLM_PROVIDER=gemini
-GEMINI_API_KEY=your-own-free-key      # from https://aistudio.google.com/apikey
-
-# Or bring another provider — same interface, your key:
-# LLM_PROVIDER=anthropic
-# ANTHROPIC_API_KEY=your-own-key
+GEMINI_API_KEY=your-own-key
+GEMINI_MODEL=gemini-flash-latest
 ```
 
-The gateway MCP server is spawned automatically from the published
-`@mcp-gen-ui/mcp-server` package — it is **LLM-free**, so it needs no key of its
-own. Deploying genui-canvas deploys only the code; each operator supplies their
-own LLM credentials at run time.
+The default follows the requested `gemini-flash-latest` alias documented on
+[Google's model page](https://ai.google.dev/gemini-api/docs/models). Google
+documents that a `latest` alias can move to a stable, preview, or experimental
+release. This prototype does not persist Gemini's resolved `modelVersion`, so
+controlled-experiment operators must record the resolved version and date
+separately.
+The Gemini response is still treated as untrusted and must pass the same strict
+catalog, reference, and order validation.
 
-### Run it (3 minutes)
-
-```bash
-pnpm install && pnpm build
-
-# 1. Orchestrator (spawns the gateway over MCP stdio). Zero key = rule-based
-#    composition; add your own GEMINI_API_KEY to apps/server/.env for LLM.
-pnpm --filter @genui-canvas/server dev      # http://localhost:8787
-
-# 2. Web canvas (in another terminal)
-pnpm --filter @genui-canvas/web dev         # http://localhost:5180
-```
-
-Pick a scenario, then **pin / hide** a card — the canvas re-composes and you see
-the interaction reshape the UI.
-
-### See the loop without a browser
+## Reproduce the closed loop
 
 ```bash
 pnpm demo:replay "서울 대학생 지원"
 ```
 
-Runs the same query with and without manipulations and prints the diff — the
-reproducible **manipulation-check**: the pinned card rises to the top and the
-hidden card is removed versus the control run.
+The default replay is deterministic and key-free. It passes through actual
+Hono session, event, and turn routes, persists this sequence, and checks that
+the second provider request received the server-derived summary:
 
-## Verification
+```text
+query.submit → composition.applied → card.pin → card.hide
+→ card.reorder → card.expand → query.submit → composition.applied
+```
 
-See [`docs/verification.md`](docs/verification.md) for the acceptance criteria of
-each milestone and the three-layer `trace → composition` verification (including
-the `pnpm demo:replay` manipulation-check that compares a composition with and
-without the intervening manipulations).
+It fails unless the pinned card moves first, the hidden card stays absent, the
+order changes, and the trace closes the loop. To investigate a locally
+configured model separately (not a CI/reproduction gate):
 
-## Research grounding
+```bash
+pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
+```
 
-- *Generative and Malleable User Interfaces with a Task-Driven Data Model* (CHI 2025) — composition-point loop, task-driven spec.
-- *Generative Interfaces for Language Models* (arXiv:2508.19227) — generative interfaces beyond chat.
-- Google **A2UI** — declarative agent-to-UI JSON with a trusted component catalog.
-- Horvitz, *Principles of Mixed-Initiative User Interfaces* — balancing user manipulation and system proposal.
+## Privacy and safety boundary
+
+- Session IDs are server-issued UUIDs; path traversal, unknown sessions,
+  sequence gaps, and different duplicate events are rejected.
+- Exact retry of an already accepted immutable event is idempotent, supporting
+  response-loss recovery without duplicate trace rows.
+- Only `query.submit.text` may contain user-authored free text, bounded to 300
+  characters. Other event payloads are type-specific and strict. Do not enter
+  personal identifiers in a query.
+- Unknown profile fields are rejected; the schema has no name, resident number,
+  email, phone, detailed address, credential, login, or submission field.
+- Local traces default to `apps/server/data/sessions` and are gitignored. The
+  application performs no login, identity verification, or application submit.
+- CORS is an explicit allowlist; internal provider errors and rejected model
+  output are not returned to the browser.
+- HTTPS source links are opened by the user in a new tab with opener isolation.
+
+## Verification and research claims
+
+- [`docs/verification.md`](docs/verification.md) — executable gates, test layers,
+  browser checks, and known limitations.
+- [`docs/research-grounding.md`](docs/research-grounding.md) — primary research,
+  implementation mapping, and claim boundaries. The requested venue gist is
+  used only as a secondary filter, not as evidence.
+- [`docs/gateway-requirements.md`](docs/gateway-requirements.md) — P0/P1/P2
+  gateway contracts and acceptance tests for the other repository's developer.
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](LICENSE)

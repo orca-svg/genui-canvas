@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -11,8 +14,9 @@ concurrency:
 
 jobs:
   ci:
-    name: build · typecheck · test
+    name: lint · test · build · replay
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -26,11 +30,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm build
-
-      - name: Typecheck
-        run: pnpm typecheck
+      - name: Lint, typecheck, and safety policy
+        run: pnpm lint
 
       - name: Test
         run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: HTTP trace replay
+        run: pnpm demo:replay
+
+      - name: Patch hygiene
+        run: git diff --check

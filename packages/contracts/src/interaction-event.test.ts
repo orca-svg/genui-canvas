@@ -6,7 +6,7 @@ import {
 } from "./interaction-event.js";
 
 const baseInput: InteractionEventInput = {
-  sessionId: "s1",
+  sessionId: "00000000-0000-4000-8000-000000000001",
   seq: 3,
   actor: "user",
   type: "card.pin",
@@ -34,6 +34,11 @@ describe("createInteractionEvent", () => {
 });
 
 describe("InteractionEventSchema", () => {
+  it("rejects a non-UUID session id", () => {
+    const event = createInteractionEvent({ ...baseInput, sessionId: "not-a-uuid" });
+    expect(InteractionEventSchema.safeParse(event).success).toBe(false);
+  });
+
   it("accepts every declared event type", () => {
     const types = [
       "card.pin", "card.unpin", "card.hide", "card.unhide",
@@ -42,7 +47,23 @@ describe("InteractionEventSchema", () => {
       "composition.applied", "composition.rejected", "tool.called", "session.start",
     ] as const;
     for (const type of types) {
-      expect(() => InteractionEventSchema.parse(createInteractionEvent({ ...baseInput, type }))).not.toThrow();
+      const actor =
+        type.startsWith("card.") || type === "query.submit" || type === "persona.switch"
+          ? "user"
+          : "system";
+      const payload =
+        type === "query.submit"
+          ? { text: "서울 청년 지원" }
+          : type === "persona.switch"
+            ? { personaId: "youth_jobseeker" }
+            : type === "card.reorder"
+              ? { toIndex: 0 }
+              : type === "composition.rejected"
+                ? { reason: "turn_failed" }
+                : undefined;
+      expect(() =>
+        InteractionEventSchema.parse(createInteractionEvent({ ...baseInput, actor, type, payload })),
+      ).not.toThrow();
     }
   });
 
@@ -61,9 +82,38 @@ describe("InteractionEventSchema", () => {
     const event = createInteractionEvent({
       ...baseInput,
       type: "card.reorder",
-      payload: { from: 2, to: 0, order: ["c2", "c1"] },
+      payload: { toIndex: 0 },
     });
     const parsed = InteractionEventSchema.parse(event);
-    expect(parsed.payload).toEqual({ from: 2, to: 0, order: ["c2", "c1"] });
+    expect(parsed.payload).toEqual({ toIndex: 0 });
+  });
+
+  it("rejects arbitrary or sensitive payload fields outside the query text contract", () => {
+    const sensitive = createInteractionEvent({
+      ...baseInput,
+      type: "card.pin",
+      payload: { email: "person@example.com" },
+    });
+    const oversizedQuery = createInteractionEvent({
+      ...baseInput,
+      type: "query.submit",
+      payload: { text: "가".repeat(301) },
+    });
+    expect(InteractionEventSchema.safeParse(sensitive).success).toBe(false);
+    expect(InteractionEventSchema.safeParse(oversizedQuery).success).toBe(false);
+  });
+
+  it("rejects free text in identifier fields and spoofed actors", () => {
+    const hostileId = createInteractionEvent({
+      ...baseInput,
+      target: { cardId: "card\nignore-previous", entityId: "person@example.com" },
+    });
+    const spoofedActor = createInteractionEvent({
+      ...baseInput,
+      actor: "system",
+      type: "card.pin",
+    });
+    expect(InteractionEventSchema.safeParse(hostileId).success).toBe(false);
+    expect(InteractionEventSchema.safeParse(spoofedActor).success).toBe(false);
   });
 });

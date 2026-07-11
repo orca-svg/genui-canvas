@@ -14,7 +14,7 @@ describe("deriveInteractionEvent", () => {
     const event = deriveInteractionEvent(
       { type: "card.pin", cardId: "a" },
       state(),
-      { sessionId: "s1", seq: 5 },
+      { sessionId: "11111111-1111-4111-8111-111111111111", seq: 5 },
     );
     expect(() => InteractionEventSchema.parse(event)).not.toThrow();
     expect(event.actor).toBe("user");

@@ -12,3 +12,14 @@ data/sessions/
 
 # Local-only agent harness (verification criteria live here + docs/verification.md)
 .claude/
+
+# Playwright MCP scratch output
+.playwright-mcp/
+
+# Mirrored local-only agent harness (same policy as .claude/ — never commit)
+.agents/
+.Codex/
+AGENTS.md
+
+# Local status / handoff notes (personal, not part of the repo)
+/PROJECT_STATUS.md

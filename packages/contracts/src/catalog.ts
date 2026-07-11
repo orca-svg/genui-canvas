@@ -19,14 +19,24 @@ export type CatalogComponentType = (typeof CATALOG_COMPONENT_TYPES)[number];
 
 export const CatalogComponentTypeSchema = z.enum(CATALOG_COMPONENT_TYPES);
 
+/** The only gateway result that may supply each trusted semantic component. */
+export const CATALOG_TOOL_RESULT_BY_COMPONENT = {
+  BenefitCard: "searchBenefits",
+  ScoreBreakdown: "searchBenefits",
+  Checklist: "buildChecklist",
+  DeadlineList: "getUpcomingDeadlines",
+  PersonaSelector: "listPersonas",
+  SourceNotice: "getBenefitDetail",
+} as const satisfies Record<CatalogComponentType, string>;
+
 /** Per-component scalar-only prop schemas (strict: unknown keys are rejected). */
 export const CATALOG_PROPS = {
   BenefitCard: z
     .object({ showScore: z.boolean().optional(), showReasons: z.boolean().optional() })
     .strict(),
-  ScoreBreakdown: z.object({ maxItems: z.number().int().positive().optional() }).strict(),
+  ScoreBreakdown: z.object({ maxItems: z.number().int().min(1).max(96).optional() }).strict(),
   Checklist: z.object({ compact: z.boolean().optional() }).strict(),
-  DeadlineList: z.object({ withinDays: z.number().int().nonnegative().optional() }).strict(),
+  DeadlineList: z.object({ withinDays: z.number().int().min(1).max(365).optional() }).strict(),
   PersonaSelector: z.object({}).strict(),
   SourceNotice: z.object({}).strict(),
 } satisfies Record<CatalogComponentType, z.ZodTypeAny>;

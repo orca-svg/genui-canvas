@@ -25,7 +25,7 @@ describe("safety boundaries", () => {
       { gateway, provider: new RuleBasedProvider() },
       {
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         traceSummary: { entityEngagement: [], recentEvents: [], turnCount: 0 },
         currentComposition: { cards: [] },
       },
@@ -41,8 +41,20 @@ describe("safety boundaries", () => {
       if (dataModel) collectStrings(dataModel.value, strings);
     }
     const urls = strings.flatMap((s) => s.match(/https?:\/\/\S+/g) ?? []);
-    // BenefitCard expansion never surfaces raw URLs; guards against future leaks.
-    expect(urls).toEqual([]);
+    const entityIds = [...new Set(result.spec.cards.map((card) => card.entityRef.entityId))].filter(
+      (entityId) => entityId !== "upcoming-deadlines" && entityId !== "personas",
+    );
+    const details = await Promise.all(entityIds.map((entityId) => gateway.getBenefitDetail(entityId)));
+    const retrievedGatewayUrls = new Set(
+      details.flatMap((detail) =>
+        detail.result.links
+          .filter((link) => link.official && link.url.startsWith("https://"))
+          .map((link) => link.url),
+      ),
+    );
+
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every((url) => retrievedGatewayUrls.has(url))).toBe(true);
   }, 30000);
 
   it("uses no definitive-eligibility phrasing in composed copy", async () => {
@@ -54,13 +66,15 @@ describe("safety boundaries", () => {
         profile: {},
       },
       candidates: [
-        { toolResult: "searchBenefits", entityId: "a", title: "국가장학금", category: "education", score: 0.9, status: "candidate" },
+        { toolResult: "searchBenefits", entityId: "a", category: "education", score: 0.9, status: "candidate" },
       ],
+      resources: [],
     })) as { intentSummary: string; cards: Array<{ rationale: string }> };
 
     const copy = [raw.intentSummary, ...raw.cards.map((c) => c.rationale)].join(" ");
     for (const phrase of BANNED_PHRASES) {
       expect(copy).not.toContain(phrase);
     }
+    expect(copy).toContain("자격 확률 아님");
   });
 });
