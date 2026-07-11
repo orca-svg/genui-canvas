@@ -70,21 +70,32 @@ function sourceNoticeBody(
   card: Extract<CardSpec, { componentType: "SourceNotice" }>,
   data: unknown,
 ): CardBody {
-  const detail = asRecord(data);
-  const sourceUrl = safeHttpsUrl(detail.sourceUrl) ?? "";
-  const applicationUrl = safeHttpsUrl(detail.applicationUrl);
-  const lastFetchedAt = typeof detail.lastFetchedAt === "string" ? detail.lastFetchedAt : "";
+  const detailResponse = asRecord(data);
+  const detail = asRecord(detailResponse.result);
+  const sourceLink = preferredOfficialLink(detail.links, "source");
+  const applicationLink = preferredOfficialLink(detail.links, "apply");
+  const sourceUrl = sourceLink?.url ?? "";
+  const applicationUrl = applicationLink?.url;
+  const freshness = asRecord(detail.freshness);
+  const observedAt = stringValue(freshness.observedAt) ?? "";
+  const dataStatus = asRecord(detailResponse.dataStatus);
+  const sourceObservations = Array.isArray(dataStatus.sources)
+    ? dataStatus.sources.filter(isRecord).slice(0, MAX_DYNAMIC_TEXT_ITEMS)
+    : [];
   const value: Record<string, unknown> = {
     heading: "출처와 최신성",
     benefitId: String(detail.id ?? card.entityRef.entityId),
     benefitTitle: String(detail.title ?? ""),
     provider: String(detail.provider ?? ""),
     sourceUrl,
-    sourceText: sourceUrl
-      ? `게이트웨이 출처(공식 여부 확인 필요): ${sourceUrl}`
-      : "게이트웨이 출처 주소를 확인할 수 없습니다.",
-    lastFetchedAt,
-    freshnessText: lastFetchedAt ? `게이트웨이 확인 시각: ${lastFetchedAt}` : "확인 시각 정보 없음",
+    sourceText: sourceLink
+      ? `공식 출처 · 상태 ${sourceLink.health}: ${sourceUrl}`
+      : "구조화된 공식 출처 링크를 확인할 수 없습니다.",
+    observedAt,
+    freshnessText: observedAt
+      ? `데이터 최신성 ${String(freshness.status ?? "unknown")} · 관측 ${observedAt}`
+      : "최신성 관측 시각 정보 없음",
+    sourceHealthText: sourceObservationText(dataStatus, sourceObservations),
     rationale: card.rationale,
     rationaleText: `표시 이유: ${card.rationale}`,
     safetyNotice:
@@ -92,7 +103,7 @@ function sourceNoticeBody(
   };
   if (applicationUrl) {
     value.applicationUrl = applicationUrl;
-    value.applicationText = `게이트웨이 제공 신청 경로(공식 여부 확인 필요): ${applicationUrl}`;
+    value.applicationText = `공식 신청 경로 · 상태 ${applicationLink?.health ?? "unknown"}: ${applicationUrl}`;
   }
 
   return {
@@ -107,6 +118,7 @@ function sourceNoticeBody(
           "provider",
           "source",
           ...(applicationUrl ? ["application"] : []),
+          "sourceHealth",
           "freshness",
           "safetyNotice",
           "rationale",
@@ -119,6 +131,7 @@ function sourceNoticeBody(
       ...(applicationUrl
         ? [{ id: "application", component: "Text", text: { path: "/applicationText" } }]
         : []),
+      { id: "sourceHealth", component: "Text", text: { path: "/sourceHealthText" } },
       { id: "freshness", component: "Text", text: { path: "/freshnessText" } },
       { id: "safetyNotice", component: "Text", text: { path: "/safetyNotice" } },
       { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
@@ -291,9 +304,10 @@ function scoreBreakdownBody(
   data: unknown,
 ): CardBody {
   const benefit = asRecord(data);
-  const score = typeof benefit.score === "number" ? benefit.score : 0;
-  const rawItems = Array.isArray(benefit.scoreBreakdown)
-    ? benefit.scoreBreakdown.filter(isRecord)
+  const ranking = asRecord(benefit.ranking);
+  const score = typeof ranking.score === "number" ? ranking.score : 0;
+  const rawItems = Array.isArray(ranking.breakdown)
+    ? ranking.breakdown.filter(isRecord)
     : [];
   const maxItems =
     typeof card.props.maxItems === "number"
@@ -344,26 +358,35 @@ function benefitCardBody(
   cache: ToolResultCache,
 ): CardBody {
   const benefit = (data ?? {}) as Record<string, unknown>;
-  const detail = (cache.get({
+  const detailResponse = asRecord(cache.get({
     toolResult: "getBenefitDetail",
     entityId: card.entityRef.entityId,
-  }) ?? {}) as Record<string, unknown>;
-  const score = typeof benefit.score === "number" ? benefit.score : 0;
+  }));
+  const detail = asRecord(detailResponse.result);
+  const assessment = asRecord(benefit.assessment);
+  const ranking = asRecord(benefit.ranking);
+  const score = typeof ranking.score === "number" ? ranking.score : 0;
   const showScore = card.props.showScore !== false;
   const showReasons = card.props.showReasons !== false;
-  const reasons = stringArray(benefit.reasons).slice(0, MAX_DYNAMIC_TEXT_ITEMS);
-  const missingInfo = stringArray(benefit.missingInfo).slice(0, MAX_DYNAMIC_TEXT_ITEMS);
-  const scoreBreakdown = Array.isArray(benefit.scoreBreakdown)
-    ? benefit.scoreBreakdown.slice(0, MAX_DYNAMIC_TEXT_ITEMS)
+  const reasons = Array.isArray(assessment.constraints)
+    ? assessment.constraints
+        .filter(isRecord)
+        .flatMap((constraint) => stringValue(constraint.explanation) ?? [])
+        .slice(0, MAX_DYNAMIC_TEXT_ITEMS)
     : [];
-  const sourceUrl = safeHttpsUrl(detail.sourceUrl);
+  const missingInfo = stringArray(assessment.missingInfo).slice(0, MAX_DYNAMIC_TEXT_ITEMS);
+  const scoreBreakdown = Array.isArray(ranking.breakdown)
+    ? ranking.breakdown.slice(0, MAX_DYNAMIC_TEXT_ITEMS)
+    : [];
+  const sourceLink = preferredOfficialLink(detail.links, "source");
+  const sourceUrl = sourceLink?.url;
 
   const value: Record<string, unknown> = {
     title: String(benefit.title ?? ""),
     provider: String(benefit.provider ?? ""),
     summary: String(benefit.summary ?? ""),
-    status: String(benefit.status ?? "candidate"),
-    statusLabel: recommendationStatusLabel(benefit.status),
+    status: String(assessment.status ?? "candidate"),
+    statusLabel: recommendationStatusLabel(assessment.status),
     scoreLabel: relativeScoreLabel(score),
     reasons,
     reasonsText: reasons.length > 0 ? `추천 근거: ${reasons.join(" · ")}` : "추천 근거: 제공되지 않음",
@@ -381,7 +404,7 @@ function benefitCardBody(
   };
   if (sourceUrl) {
     value.sourceUrl = sourceUrl;
-    value.sourceText = `게이트웨이 출처(공식 여부 확인 필요): ${sourceUrl}`;
+    value.sourceText = `공식 출처 · 상태 ${sourceLink?.health ?? "unknown"}: ${sourceUrl}`;
   }
 
   const childIds = [
@@ -426,6 +449,10 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -467,8 +494,9 @@ function deadlineResultText(result: Record<string, unknown>): string {
     : "날짜 미정";
   const title = typeof result.title === "string" ? result.title : "이름 없는 혜택";
   const provider = typeof result.provider === "string" ? ` · ${result.provider}` : "";
-  const status = ` · ${recommendationStatusLabel(result.status)}`;
-  const missing = stringArray(result.missingInfo);
+  const assessment = asRecord(result.assessment);
+  const status = ` · ${recommendationStatusLabel(assessment.status)}`;
+  const missing = stringArray(assessment.missingInfo);
   const missingText = missing.length > 0 ? ` · 확인 필요: ${missing.join(", ")}` : "";
   return `${deadline} · ${title}${provider}${status}${missingText}`;
 }
@@ -502,8 +530,8 @@ function recommendationStatusLabel(status: unknown): string {
   switch (status) {
     case "needs_more_info":
       return "추가 정보 확인이 필요한 후보";
-    case "not_applicable":
-      return "구조화 조건과 충돌 가능성 · 공식 요건 확인 필요";
+    case "conflict_detected":
+      return "구조화된 공식 조건과 충돌 감지 · 공식 요건 확인 필요";
     default:
       return "검토할 혜택 후보";
   }
@@ -513,13 +541,39 @@ function relativeScoreLabel(score: number): string {
   return `상대 관련도 ${Math.round(score * 100)}/100 · 자격 확률 아님`;
 }
 
-function safeHttpsUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    return new URL(value).protocol === "https:" ? value : undefined;
-  } catch {
-    return undefined;
+function preferredOfficialLink(
+  value: unknown,
+  relation: "source" | "apply",
+): { url: string; health: string } | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const candidate of value) {
+    const link = asRecord(candidate);
+    if (link.official !== true || link.rel !== relation || typeof link.url !== "string") {
+      continue;
+    }
+    try {
+      if (new URL(link.url).protocol !== "https:") continue;
+      return {
+        url: link.url,
+        health: stringValue(link.health) ?? "unknown",
+      };
+    } catch {
+      // Defensive only; published schemas already reject malformed URLs.
+    }
   }
+  return undefined;
+}
+
+function sourceObservationText(
+  dataStatus: Record<string, unknown>,
+  sources: Record<string, unknown>[],
+): string {
+  const mode = stringValue(dataStatus.mode) ?? "unknown";
+  const coverage = dataStatus.partial === true ? "일부 출처 응답" : "구성 출처 응답";
+  const summary = sources
+    .map((source) => `${String(source.sourceId ?? "unknown")}:${String(source.status ?? "unknown")}`)
+    .join(", ");
+  return `데이터 모드 ${mode} · ${coverage}${summary ? ` · ${summary}` : ""}`;
 }
 
 function scoreBreakdownLabel(items: unknown[]): string {

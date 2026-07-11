@@ -15,6 +15,7 @@ import {
   UserQueryTextSchema,
 } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
+import { GatewayCompatibilityError } from "./mcp/gateway-client.js";
 import { summarizeTrace } from "./trace/summarize.js";
 import type { TraceStore } from "./trace/store.js";
 
@@ -172,10 +173,16 @@ export function createApp(deps: AppDeps) {
             data: JSON.stringify({ kind: "error", message: "구성을 검증하지 못했습니다" }),
           });
         }
-      } catch {
+      } catch (error) {
         await stream.writeSSE({
           event: "error",
-          data: JSON.stringify({ kind: "error", message: "구성 중 오류가 발생했습니다" }),
+          data: JSON.stringify({
+            kind: "error",
+            message:
+              error instanceof GatewayCompatibilityError
+                ? "게이트웨이 응답 버전이 호환되지 않습니다. 패키지 버전을 확인하세요."
+                : "구성 중 오류가 발생했습니다",
+          }),
         });
       }
     });

@@ -9,20 +9,80 @@ const summary = {
   provider: "한국장학재단",
   category: "education",
   summary: "대학생 등록금 지원",
-  status: "candidate",
-  score: 0.955,
-  scoreBreakdown: [
-    {
-      dimension: "student",
-      signal: 1,
-      weight: 3,
-      contribution: 3,
-      explanation: "재학생 조건과 일치합니다.",
-    },
-  ],
-  reasons: ["재학생 조건과 일치"],
-  missingInfo: ["소득 구간 확인 필요"],
+  assessment: {
+    status: "candidate",
+    constraints: [
+      {
+        dimension: "student",
+        outcome: "match",
+        basis: "authoritative_structured",
+        ruleId: "test.student",
+        ruleVersion: "2.0.0",
+        sourceFields: ["studentStatus"],
+        explanation: "재학생 조건과 일치합니다.",
+      },
+    ],
+    missingInfo: ["소득 구간 확인 필요"],
+  },
+  ranking: {
+    score: 0.955,
+    breakdown: [
+      {
+        dimension: "student",
+        signal: 1,
+        weight: 3,
+        contribution: 3,
+        explanation: "재학생 조건과 일치합니다.",
+      },
+    ],
+  },
+  provenance: [],
+  links: [],
+  freshness: { status: "fresh", observedAt: "2026-07-10T00:00:00.000Z" },
 };
+
+function detailResponse() {
+  return {
+    schemaVersion: "benefit-detail.v2",
+    dataStatus: {
+      mode: "fixture",
+      partial: false,
+      sources: [
+        {
+          sourceId: "fixture-benefits",
+          status: "ok",
+          retrievedAt: "2026-07-09T12:00:00.000Z",
+          recordCount: 1,
+          adapterVersion: "0.3.0",
+        },
+      ],
+    },
+    result: {
+      ...summary,
+      target: "대학생",
+      eligibility: [],
+      documents: [],
+      applicationMethods: [],
+      links: [
+        {
+          rel: "source",
+          url: "https://www.gov.kr/official-benefit",
+          official: true,
+          health: "verified",
+          verifiedAt: "2026-07-09T12:00:00.000Z",
+        },
+        {
+          rel: "apply",
+          url: "https://apply.example.go.kr/benefit",
+          official: true,
+          health: "unchecked",
+        },
+      ],
+      freshness: { status: "fresh", observedAt: "2026-07-09T12:00:00.000Z" },
+    },
+    generatedAt: "2026-07-10T00:00:00.000Z",
+  };
+}
 
 function cacheWith(...summaries: Array<typeof summary>) {
   const cache = new ToolResultCache();
@@ -67,11 +127,7 @@ describe("expandComposition — BenefitCard", () => {
 
   it("keeps recommendation evidence, uncertainty, rationale, and the retrieved gateway source in the BenefitCard model", () => {
     const cache = cacheWith(summary);
-    cache.put("getBenefitDetail", summary.id, {
-      id: summary.id,
-      sourceUrl: "https://www.gov.kr/official-benefit",
-      lastFetchedAt: "2026-07-10T00:00:00.000Z",
-    });
+    cache.put("getBenefitDetail", summary.id, detailResponse());
 
     const messages = expandComposition(specFor(summary.id), cache);
     const dataMsg = messages.find((m) => "updateDataModel" in m) as Record<string, unknown>;
@@ -79,7 +135,7 @@ describe("expandComposition — BenefitCard", () => {
 
     expect(value).toMatchObject({
       status: "candidate",
-      reasons: ["재학생 조건과 일치"],
+      reasons: ["재학생 조건과 일치합니다."],
       missingInfo: ["소득 구간 확인 필요"],
       scoreBreakdown: [
         expect.objectContaining({ dimension: "student", explanation: "재학생 조건과 일치합니다." }),
@@ -96,13 +152,16 @@ describe("expandComposition — BenefitCard", () => {
     expect(a).toEqual(b);
   });
 
-  it("frames a gateway not_applicable status as a possible conflict, not a final decision", () => {
-    const conflict = { ...summary, status: "not_applicable" };
+  it("frames a structured conflict as a verification need, not a final decision", () => {
+    const conflict = {
+      ...summary,
+      assessment: { ...summary.assessment, status: "conflict_detected" },
+    };
     const messages = expandComposition(specFor(summary.id), cacheWith(conflict));
     const dataMsg = messages.find((message) => "updateDataModel" in message) as Record<string, unknown>;
     const value = (dataMsg.updateDataModel as { value: Record<string, unknown> }).value;
 
-    expect(value.statusLabel).toBe("구조화 조건과 충돌 가능성 · 공식 요건 확인 필요");
+    expect(value.statusLabel).toBe("구조화된 공식 조건과 충돌 감지 · 공식 요건 확인 필요");
   });
 
   it("skips a card whose entityRef is not in the cache", () => {
@@ -238,14 +297,17 @@ describe("expandComposition — semantic catalog components", () => {
   it("renders DeadlineList as dated candidate rows with uncertainty intact", () => {
     const cache = new ToolResultCache();
     cache.put("getUpcomingDeadlines", "upcoming-deadlines", {
-      profile: { region: "서울" },
+      profile: { regionCode: "KR-11" },
       withinDays: 30,
       generatedAt: "2026-07-10T00:00:00.000Z",
       results: [
         {
           ...summary,
-          status: "needs_more_info",
-          missingInfo: ["소득 구간"],
+          assessment: {
+            ...summary.assessment,
+            status: "needs_more_info",
+            missingInfo: ["소득 구간"],
+          },
           applicationDeadline: "2026-07-20T14:59:59.000Z",
         },
         {
@@ -283,8 +345,10 @@ describe("expandComposition — semantic catalog components", () => {
       results: [
         expect.objectContaining({
           id: summary.id,
-          status: "needs_more_info",
-          missingInfo: ["소득 구간"],
+          assessment: expect.objectContaining({
+            status: "needs_more_info",
+            missingInfo: ["소득 구간"],
+          }),
           applicationDeadline: "2026-07-20T14:59:59.000Z",
         }),
       ],
@@ -342,14 +406,7 @@ describe("expandComposition — semantic catalog components", () => {
 
   it("renders SourceNotice solely from retrieved detail provenance and freshness fields", () => {
     const cache = new ToolResultCache();
-    cache.put("getBenefitDetail", summary.id, {
-      id: summary.id,
-      title: summary.title,
-      provider: summary.provider,
-      sourceUrl: "https://www.gov.kr/official-benefit",
-      applicationUrl: "https://apply.example.go.kr/benefit",
-      lastFetchedAt: "2026-07-09T12:00:00.000Z",
-    });
+    cache.put("getBenefitDetail", summary.id, detailResponse());
     const spec = {
       intentSummary: "출처 확인",
       cards: [
@@ -374,10 +431,11 @@ describe("expandComposition — semantic catalog components", () => {
       provider: summary.provider,
       sourceUrl: "https://www.gov.kr/official-benefit",
       applicationUrl: "https://apply.example.go.kr/benefit",
-      lastFetchedAt: "2026-07-09T12:00:00.000Z",
+      observedAt: "2026-07-09T12:00:00.000Z",
       rationale: "최종 판단 전에 공식 정보를 확인하도록 안내합니다.",
     });
-    expect(value.sourceText).toContain("공식 여부 확인 필요");
-    expect(value.safetyNotice).toMatch(/기관 공식 주소|직접/);
+    expect(value.sourceText).toContain("공식 출처");
+    expect(value.sourceHealthText).toContain("fixture-benefits:ok");
+    expect(value.safetyNotice).toMatch(/공식 주소|직접/);
   });
 });

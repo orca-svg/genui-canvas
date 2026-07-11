@@ -23,7 +23,7 @@ const provider = live ? createProvider() : new RuleBasedProvider();
 try {
   const report = await runManipulationCheck(
     { gateway, provider },
-    { query, profile: { region: "서울", studentStatus: "student" } },
+    { query, profile: { regionCode: "KR-11", studentStatus: "student" } },
   );
 
   // eslint-disable-next-line no-console

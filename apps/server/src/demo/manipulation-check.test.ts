@@ -13,7 +13,7 @@ describe("runManipulationCheck (live gateway, rule-based)", () => {
     await gateway.connect();
     const report = await runManipulationCheck(
       { gateway, provider: new RuleBasedProvider() },
-      { query: "서울 대학생 지원", profile: { region: "서울", studentStatus: "student" } },
+      { query: "서울 대학생 지원", profile: { regionCode: "KR-11", studentStatus: "student" } },
     );
 
     expect(report.pinnedMovedToTop).toBe(true);

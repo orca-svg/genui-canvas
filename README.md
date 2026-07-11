@@ -10,10 +10,12 @@ expands the selection into a bounded A2UI message subset, and gives the user
 immediate control over the resulting canvas.
 
 > **Current status: fixture-backed research prototype.** The installed
-> `@mcp-gen-ui/mcp-server@0.2.0` entry currently serves fixture data. Results are
+> `@mcp-gen-ui/mcp-server@0.3.0` entry is started in explicit fixture mode for
+> deterministic local verification. Results are
 > candidates, not eligibility decisions; relative relevance scores are not
-> probabilities. A gateway-provided link is not called official unless a future
-> gateway contract supplies verified-link provenance. Do not use this build for
+> probabilities. Links are labeled official only from the gateway's structured
+> exact-origin verification metadata, with health and freshness shown separately.
+> Do not use this build for
 > production benefit coverage or automated applications.
 
 ## Interaction model
@@ -44,7 +46,7 @@ the model instruction channel and are joined after strict validation.
 | `Checklist` | `buildChecklist` | Required/optional preparation items and caveats |
 | `DeadlineList` | `getUpcomingDeadlines` | Dated candidate deadlines with uncertainty intact |
 | `PersonaSelector` | `listPersonas` | Visible ranking-weight presets; never an eligibility switch |
-| `SourceNotice` | `getBenefitDetail` | Gateway source, fetch time, and user-verification notice |
+| `SourceNotice` | `getBenefitDetail` | Source observation, freshness, verified-link health, and user-verification notice |
 
 The deterministic expander emits only A2UI v0.9 `Column` and `Text` primitives.
 The wire contract rejects unknown catalogs/components before rendering, and all
@@ -69,8 +71,8 @@ packages/contracts                     packages/renderer
 ```
 
 The canvas consumes the gateway's published npm packages; it does not fork or
-modify the gateway repository. Required gateway changes are handed off in
-[`docs/gateway-requirements.md`](docs/gateway-requirements.md).
+modify the gateway repository. The original v0.3 producer acceptance handoff is
+retained in [`docs/gateway-requirements.md`](docs/gateway-requirements.md).
 
 ## Quick start
 

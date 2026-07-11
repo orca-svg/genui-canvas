@@ -46,7 +46,7 @@ export type EntityRef = z.infer<typeof EntityRefSchema>;
 
 const CardBaseShape = {
   cardId: OpaqueIdentifierSchema,
-  props: z.record(ScalarSchema).default({}),
+  props: z.record(z.string(), ScalarSchema).default({}),
   emphasis: z.enum(["primary", "secondary"]).optional(),
   // Why this card, in terms of a trace signal — powers transparency + tests.
   rationale: SafeRationaleSchema,

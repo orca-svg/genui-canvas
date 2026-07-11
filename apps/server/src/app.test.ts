@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInteractionEvent } from "@genui-canvas/contracts";
-import { GatewayClient } from "./mcp/gateway-client.js";
+import { GatewayClient, GatewayCompatibilityError } from "./mcp/gateway-client.js";
 import { RuleBasedProvider } from "./llm/provider.js";
 import { TraceStore } from "./trace/store.js";
 import { createApp } from "./app.js";
@@ -346,7 +346,7 @@ describe("POST /api/turn", () => {
       body: JSON.stringify({
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
         profile: {
-          region: "서울",
+          regionCode: "KR-11",
           studentStatus: "student",
           email: "person@example.com",
         },
@@ -373,7 +373,7 @@ describe("POST /api/turn", () => {
       body: JSON.stringify({
         sessionId: "../outside",
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         currentComposition: { cards: [] },
       }),
     });
@@ -387,7 +387,7 @@ describe("POST /api/turn", () => {
       body: JSON.stringify({
         sessionId: "00000000-0000-4000-8000-000000000002",
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         currentComposition: { cards: [] },
       }),
     });
@@ -435,7 +435,7 @@ describe("POST /api/turn", () => {
       body: JSON.stringify({
         sessionId,
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         currentComposition: { cards: [] },
       }),
     });
@@ -464,13 +464,39 @@ describe("POST /api/turn", () => {
       body: JSON.stringify({
         sessionId,
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         currentComposition: { cards: [] },
       }),
     });
     const text = await res.text();
     expect(text).not.toContain(secret);
     expect(text).toContain("구성 중 오류가 발생했습니다");
+  });
+
+  it("renders a visible fallback for an unsupported gateway schema version", async () => {
+    const incompatibleApp = createApp({
+      gateway: {
+        async searchBenefits() {
+          throw new GatewayCompatibilityError();
+        },
+      } as unknown as GatewayClient,
+      provider: new RuleBasedProvider(),
+      traceStore,
+    });
+    const sessionId = await issueSession(incompatibleApp);
+    const res = await incompatibleApp.request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        trigger: { type: "query.submit", text: "서울 대학생 지원" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
+        currentComposition: { cards: [] },
+      }),
+    });
+    const text = await res.text();
+    expect(text).toContain("응답 버전이 호환되지 않습니다");
+    expect(text).not.toContain("benefit-search.v999");
   });
 
   it("does not expose rejected provider output details in the SSE error", async () => {
@@ -504,7 +530,7 @@ describe("POST /api/turn", () => {
       body: JSON.stringify({
         sessionId,
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         currentComposition: { cards: [] },
       }),
     });

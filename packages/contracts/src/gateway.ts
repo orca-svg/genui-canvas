@@ -1,16 +1,15 @@
-// Re-exports of the gateway's published contract types so the rest of
-// genui-canvas has a single import site for @mcp-gen-ui/schema. The gateway is
-// the source of truth for benefit data shapes; we never redefine them.
-import { UserProfileSchema as PublishedUserProfileSchema } from "@mcp-gen-ui/schema";
-
-/** Consumer-side hardening until the gateway publishes strict v2 objects. */
-export const StrictUserProfileSchema = PublishedUserProfileSchema.strict();
-
+// The published gateway package is the only source of truth for benefit data
+// shapes. This module is intentionally only a re-export boundary.
 export {
+  StrictCoarseProfileSchema as StrictUserProfileSchema,
   UserProfileSchema,
   BenefitSummarySchema,
+  BenefitCandidateV2Schema,
+  CandidateAssessmentSchema,
+  RankingSchema,
   ScoreBreakdownItemSchema,
   BenefitDetailSchema,
+  GetBenefitDetailResponseSchema,
   ChecklistResponseSchema,
   ChecklistItemSchema,
   ApplicationGuideResponseSchema,
@@ -18,21 +17,35 @@ export {
   UpcomingDeadlineSummarySchema,
   UpcomingDeadlinesResponseSchema,
   BenefitSearchResponseSchema,
+  ListPersonasResponseSchema,
   RecommendationPersonaSchema,
   BenefitCategorySchema,
   RecommendationWeightsSchema,
+  DataStatusSchema,
+  VerifiedLinkSchema,
+  StableMcpErrorSchema,
+  HostileDisplayTextFixtureSchema,
+  normalizeQuery,
 } from "@mcp-gen-ui/schema";
 
 export type {
-  UserProfile,
+  StrictCoarseProfile as UserProfile,
   BenefitSummary,
+  BenefitCandidateV2,
+  CandidateAssessment,
+  Ranking,
   ScoreBreakdownItem,
   BenefitDetail,
+  GetBenefitDetailResponse,
   ChecklistResponse,
   ApplicationGuideResponse,
   RecommendationPersona,
   BenefitCategory,
   BenefitSearchResponse,
   UpcomingDeadlinesResponse,
+  ListPersonasResponse,
   RecommendationWeights,
+  DataStatus,
+  VerifiedLink,
+  StableMcpError,
 } from "@mcp-gen-ui/schema";

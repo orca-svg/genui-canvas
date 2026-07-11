@@ -26,12 +26,12 @@ const SCENARIOS: Scenario[] = [
   {
     label: "서울 거주 대학생",
     query: "서울 대학생 지원",
-    profile: { region: "서울", studentStatus: "student", persona: "university_student", interests: ["education", "housing"] },
+    profile: { regionCode: "KR-11", studentStatus: "student", persona: "university_student", interests: ["education", "housing"] },
   },
   {
     label: "청년 구직자",
     query: "서울 청년 구직 지원",
-    profile: { region: "서울", employmentStatus: "unemployed", persona: "youth_jobseeker", interests: ["employment"] },
+    profile: { regionCode: "KR-11", employmentStatus: "unemployed", persona: "youth_jobseeker", interests: ["employment"] },
   },
 ];
 

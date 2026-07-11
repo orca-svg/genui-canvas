@@ -29,8 +29,8 @@ pnpm verify
 CI also runs `git diff --check`. The Linux CI job has read-only repository
 permissions and a 15-minute timeout.
 
-Tests spawn `@mcp-gen-ui/mcp-server@0.2.0` over local stdio. That published
-entry serves fixtures, so no external data request or LLM key is needed. Node
+Tests spawn `@mcp-gen-ui/mcp-server@0.3.0` over local stdio in explicit fixture
+mode. No external data request or LLM key is needed. Node
 may print its expected experimental SQLite warning; this is not a test failure.
 
 ## Acceptance matrix
@@ -41,10 +41,10 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | Renderer | Escaped A2UI text renders; empty/late surfaces work; shell order and hidden filtering work; preview/expanded wrappers and IDs remain stable; tests finish without React `act` warnings. |
 | Shell UX | Custom query and persona are composition points; pin/hide/preview/reorder are immediate; pinned-first invariant holds; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
 | Trace/API | Server-issued UUID session, no path traversal, seq starts at zero, gap/different duplicate rejected, exact retry idempotent, unknown sessions rejected, request objects strict, error details hidden, CORS allowlisted. |
-| Gateway boundary | Current TextContent JSON is parsed with published gateway Zod schemas; malformed output fails; future `structuredContent` must deep-equal the text fallback. |
+| Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
 | Model boundary | Prompt contains no raw query, title, summary, URL, or profile string; only safe semantic projection; strict structured output and hallucinated references are rejected. |
 | Manipulation invariants | Hidden cards cannot be resurfaced, pinned cards cannot be dropped/buried, explicit reorder survives, and deterministic expansion preserves trusted tool data. |
-| Trust copy | Scores say “relative relevance, not eligibility probability”; `not_applicable` is a possible conflict; candidate/source-verification caveats remain visible; no definitive eligibility wording. |
+| Trust copy | Scores say “relative relevance, not eligibility probability”; `conflict_detected` remains a candidate-level verification warning; source health/freshness and non-adjudication caveats remain visible; no definitive eligibility wording. |
 | CI replay | Actual session→event→turn routes persist the exact eight-event sequence and the second provider request observes server-derived pin/hide/reorder/expand signals. |
 
 ## Closed-loop proof
@@ -121,8 +121,9 @@ Required manual/browser checks:
 6. Long Korean titles, URLs, caveats, and 200% text spacing do not overlap or
    become inaccessible.
 7. Reduced-motion preference removes non-essential transitions.
-8. A source link opens the exact HTTPS metadata URL in a new tab with
-   `noopener noreferrer`; it is labeled “출처 페이지,” not verified official.
+8. A source link opens the exact structured HTTPS metadata URL in a new tab with
+   `noopener noreferrer`; only `official: true` links receive an official-source
+   label, and stale/unchecked health remains visible.
 9. Keyboard and VoiceOver/NVDA users can identify query, persona, result region,
    card state, reorder, hide/unhide, pin/unpin, and preview/expand actions.
 10. Browser console contains no application errors during query, manipulation,
@@ -153,7 +154,8 @@ boundary, deterministic manipulation, and replay behavior. It does **not**
 prove:
 
 - live benefit coverage, source completeness, or current eligibility data;
-- that a gateway link is an official or healthy link;
+- live verification continuity for every configured government source or the
+  current completeness of a deliberately bounded adapter page;
 - user task success, accessibility for disabled participants, appropriate
   reliance, fairness, or take-up improvement;
 - live-model quality, latency, availability, or reproducibility;

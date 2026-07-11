@@ -62,7 +62,7 @@ const InteractionEventBaseSchema = z.object({
     })
     .strict()
     .optional(),
-  payload: z.record(z.unknown()).optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
   context: z
     .object({
       compositionId: OpaqueIdentifierSchema,

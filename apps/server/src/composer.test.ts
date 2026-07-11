@@ -10,7 +10,7 @@ afterAll(async () => {
 
 const turn = {
   trigger: { type: "query.submit", text: "서울 대학생 지원" } as const,
-  profile: { region: "서울", studentStatus: "student" as const },
+  profile: { regionCode: "KR-11", studentStatus: "student" as const },
   traceSummary: { entityEngagement: [], recentEvents: [], turnCount: 0 },
   currentComposition: { cards: [] },
 };
@@ -53,6 +53,8 @@ describe("composeTurn (live gateway + rule-based provider)", () => {
 
   it("keeps a pinned card first even when the provider ignores the pin (server enforcement)", async () => {
     await gateway.connect();
+    const search = await gateway.searchBenefits(turn.trigger.text, turn.profile);
+    const pinnedId = search.results[0]!.id;
     // A provider that returns candidates in reverse score order (ignores pins).
     const contrarian: LlmProvider = {
       name: "contrarian",
@@ -71,8 +73,8 @@ describe("composeTurn (live gateway + rule-based provider)", () => {
       currentComposition: {
         cards: [
           {
-            cardId: "card-national-scholarship",
-            entityId: "national-scholarship",
+            cardId: `card-${pinnedId}`,
+            entityId: pinnedId,
             componentType: "BenefitCard",
             pinned: true,
             hidden: false,
@@ -84,7 +86,7 @@ describe("composeTurn (live gateway + rule-based provider)", () => {
     const result = await composeTurn({ gateway, provider: contrarian }, pinnedTurn);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.spec.order[0]).toBe("card-national-scholarship");
+      expect(result.spec.order[0]).toBe(`card-${pinnedId}`);
     }
   }, 30000);
 });
@@ -101,11 +103,11 @@ describe("composeTurn semantic catalog hydration", () => {
               provider: "기관",
               category: "other",
               summary: "요약",
-              status: "candidate",
-              score: 0.5,
-              scoreBreakdown: [],
-              reasons: [],
-              missingInfo: [],
+              assessment: { status: "candidate", constraints: [], missingInfo: [] },
+              ranking: { score: 0.5, breakdown: [] },
+              provenance: [],
+              links: [],
+              freshness: { status: "unknown", observedAt: "2026-07-10T00:00:00.000Z" },
             },
           ],
         };
@@ -133,11 +135,15 @@ describe("composeTurn semantic catalog hydration", () => {
       provider: "한국장학재단",
       category: "education" as const,
       summary: "대학생 등록금 지원",
-      status: "candidate" as const,
-      score: 0.9,
-      scoreBreakdown: [],
-      reasons: ["재학생 조건 일치"],
-      missingInfo: [],
+      assessment: {
+        status: "candidate" as const,
+        constraints: [],
+        missingInfo: [],
+      },
+      ranking: { score: 0.9, breakdown: [] },
+      provenance: [],
+      links: [],
+      freshness: { status: "fresh" as const, observedAt: "2026-07-10T00:00:00.000Z" },
     };
     const fakeGateway = {
       async searchBenefits() {
@@ -145,14 +151,29 @@ describe("composeTurn semantic catalog hydration", () => {
       },
       async getBenefitDetail() {
         return {
-          ...benefit,
-          target: "대학생",
-          eligibility: [],
-          documents: [],
-          applicationMethods: [],
-          sourceUrl: "https://www.gov.kr/benefit",
-          lastFetchedAt: "2026-07-10T00:00:00.000Z",
-          evidence: [],
+          schemaVersion: "benefit-detail.v2",
+          dataStatus: {
+            mode: "fixture",
+            partial: false,
+            sources: [{ sourceId: "fixture", status: "ok", recordCount: 1 }],
+          },
+          result: {
+            ...benefit,
+            target: "대학생",
+            eligibility: [],
+            documents: [],
+            applicationMethods: [],
+            links: [
+              {
+                rel: "source",
+                url: "https://www.gov.kr/benefit",
+                official: true,
+                health: "verified",
+                verifiedAt: "2026-07-10T00:00:00.000Z",
+              },
+            ],
+          },
+          generatedAt: "2026-07-10T00:00:00.000Z",
         };
       },
       async buildChecklist() {

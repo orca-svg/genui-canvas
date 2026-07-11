@@ -28,7 +28,7 @@ silently treated as the general AAAI technical track.
 | [DynaVis, CHI 2024](https://doi.org/10.1145/3613904.3642639) | Persistent widgets enabled rapid, repeated direct edits and were preferred over NLI-only editing in a 24-person visualization study. | Pin, hide, expand/collapse, and keyboard reorder are local reducer operations; the model/network is called only at a composition point. | The local-action target of p95 `<100 ms` is a project QA threshold, not a number reported by DynaVis. Public-benefit discovery is a different task. |
 | [*Generative Interfaces for Language Models*, Findings of ACL 2026](https://aclanthology.org/2026.findings-acl.74/) | GenUI was evaluated across query-interface consistency, task efficiency, usability, learnability, information clarity, aesthetics, and interaction satisfaction. | The UI exposes query, persona, status, source, rationale, and reversible manipulation paths; the seven dimensions are retained as future study outcomes. | The paper does not show that every query benefits from GenUI, nor that an attractive generated UI is correct. This project still lacks a chat/static/GenUI routing experiment. |
 | [UICrit, UIST 2024](https://doi.org/10.1145/3654777.3676381) | Structured expert critique data improved LLM UI feedback. | Release QA includes reflow, focus, contrast, status, readable labels, and button/keyboard checks; browser inspection complements automated tests. | An LLM or automated accessibility checker is not the sole release oracle. |
-| [Appropriate Reliance, CSCW 2024](https://doi.org/10.1145/3637318) | Calibrated uncertainty displays alone did not eliminate over-reliance on wrong advice. | Scores are labeled “relative relevance, not eligibility probability”; `not_applicable` is displayed as a possible constraint conflict; candidate and source-verification notices remain adjacent to results. | A medical decision study cannot be directly generalized to Korean public benefits. It motivates a reliance test; it does not validate this wording. |
+| [Appropriate Reliance, CSCW 2024](https://doi.org/10.1145/3637318) | Calibrated uncertainty displays alone did not eliminate over-reliance on wrong advice. | Scores are labeled “relative relevance, not eligibility probability”; `conflict_detected` is displayed as a candidate-level constraint warning; source health, freshness, and verification notices remain adjacent to results. | A medical decision study cannot be directly generalized to Korean public benefits. It motivates a reliance test; it does not validate this wording. |
 | [Prompt Injection Benchmark, USENIX Security 2024](https://www.usenix.org/conference/usenixsecurity24/presentation/liu-yupei) | Prompt-injection attacks and defenses require systematic evaluation. | Raw query text, benefit title/summary, profile strings, and URLs are excluded from the model prompt. Only bounded opaque IDs, enums, ranks, scores, component references, and trace flags are projected. Hostile-text regression tests protect the boundary. | String filtering is not presented as a complete defense. |
 | [StruQ, USENIX Security 2025](https://www.usenix.org/conference/usenixsecurity25/presentation/chen-sizhe) | Separating instruction and data channels can improve prompt-injection resistance. | Gateway display data is cached outside the provider prompt and joined deterministically only after schema/reference validation. Opaque entity IDs have a restricted grammar. | A closed commercial model is not assumed to provide StruQ's trained-model guarantee. |
 | [Wello and the Korean Government, IAAI 2025](https://ojs.aaai.org/index.php/AAAI/article/view/35140) | A deployed Korean benefit recommender reports Recall/NDCG results using large interaction and document datasets. | The project documents Recall/NDCG and application outcomes as future metrics, while keeping the present gateway deterministic and LLM-free. | No learning-based ranking is justified without consent, ground truth, retention/deletion controls, and subgroup fairness evaluation. |
@@ -43,8 +43,9 @@ silently treated as the general AAAI technical track.
   not claim v0.9.1 conformance. Upgrade requires a cross-package protocol test.
 - [MCP revision 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
   defines `outputSchema`, `structuredContent`, and tool annotations. The canvas
-  validates today's text JSON and is ready to cross-check structured/text
-  equality; the gateway work needed to publish those outputs is specified in
+  validates the gateway's published v2 output schemas and rejects any mismatch
+  between `structuredContent` and the JSON TextContent fallback. The original
+  producer acceptance handoff is retained in
   [gateway-requirements.md](gateway-requirements.md).
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/) informs 320 CSS-pixel reflow,
   non-drag reorder controls, visible focus, status announcement, target sizing,
@@ -65,26 +66,28 @@ silently treated as the general AAAI technical track.
 3. `pnpm demo:replay` passes through Hono HTTP session/event/turn endpoints,
    persists eight events, verifies the second provider request received the
    server-derived trace, and checks pin/hide/reorder effects.
-4. Gateway tool outputs are parsed with the shared published Zod contracts.
-   If future MCP `structuredContent` is also present it must equal the text
-   fallback exactly.
+4. Gateway tool outputs are parsed with the shared published v2 Zod contracts;
+   MCP `structuredContent` must equal the JSON TextContent fallback exactly,
+   and unsupported schema versions produce a visible compatibility fallback.
 5. The provider sees no raw user query, gateway title/summary, profile string,
    or URL. Its result must satisfy strict component/tool/entity/order schemas.
 6. A2UI is reduced to trusted `Column` and `Text` primitives, all gateway text
    is HTML-escaped, and model-produced URLs/HTML are impossible by contract.
-7. Scores and statuses are framed as candidate-ranking signals, and the UI
-   does not call a gateway URL “official” without a future verification field.
+7. Scores and statuses are framed as candidate-ranking signals. The UI uses
+   only structured gateway links and labels a link official only when
+   `official: true`, while retaining link health and freshness warnings.
 
 The authoritative executable checks are in [verification.md](verification.md).
 
 ## Known evidence gaps
 
-- The installed gateway MCP entry currently serves fixtures. No claim about
-  live benefit coverage, timeliness, recall, or official-source availability is
-  supported.
-- The gateway v0.2 summary contract lacks field-level provenance, source
-  health, verified-link state, and freshness on every search result. The canvas
-  must fetch detail per candidate and labels links as gateway-provided.
+- The installed gateway MCP entry is intentionally run in fixture mode for
+  deterministic verification. No claim about live benefit coverage,
+  timeliness, recall, or continuous official-source availability is supported.
+- The v0.3 contract exposes field provenance, source observations, verified-link
+  state, and freshness. Live keys, full multi-page ingestion, and sustained
+  source-specific canary evidence are still operational requirements rather
+  than facts established by the fixture-backed canvas tests.
 - There is no completed comparative user study, accessibility participant
   study, deployment outcome, or calibrated reliance experiment.
 - The project has not measured the local-action p95 threshold in a browser lab;

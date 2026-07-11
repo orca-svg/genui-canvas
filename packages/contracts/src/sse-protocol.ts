@@ -55,7 +55,7 @@ export const A2uiMessageSchema = z.union([
         .object({
           surfaceId: SurfaceIdSchema,
           path: z.literal("/"),
-          value: z.record(z.unknown()),
+          value: z.record(z.string(), z.unknown()),
         })
         .strict(),
     })

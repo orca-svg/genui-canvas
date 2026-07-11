@@ -123,8 +123,8 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
     toolResult: "searchBenefits",
     entityId: benefit.id,
     category: benefit.category,
-    score: benefit.score,
-    status: benefit.status,
+    score: benefit.ranking.score,
+    status: benefit.assessment.status,
   }));
   const resources: ComposeResource[] = [];
   for (const benefit of benefits) {
@@ -203,9 +203,10 @@ function buildCardMetadata(
     const summary = asRecord(
       cache.get({ toolResult: "searchBenefits", entityId }),
     );
-    const detail = asRecord(
+    const detailResponse = asRecord(
       cache.get({ toolResult: "getBenefitDetail", entityId }),
     );
+    const detail = asRecord(detailResponse.result);
     const baseTitle = stringValue(summary.title) ?? stringValue(detail.title) ?? entityId;
     const suffix: Record<string, string> = {
       ScoreBreakdown: " · 상대 관련도",
@@ -216,9 +217,11 @@ function buildCardMetadata(
       cardId,
       title: `${baseTitle}${suffix[card.componentType] ?? ""}`,
     };
-    const sourceUrl = safeHttpsUrl(detail.sourceUrl);
-    if (sourceUrl) metadata.sourceUrl = sourceUrl;
-    const sourceCheckedAt = stringValue(detail.lastFetchedAt);
+    const sourceLink = preferredOfficialLink(detail.links, "source");
+    if (sourceLink) metadata.sourceUrl = sourceLink.url;
+    const freshness = asRecord(detail.freshness);
+    const sourceCheckedAt =
+      stringValue(sourceLink?.verifiedAt) ?? stringValue(freshness.observedAt);
     if (sourceCheckedAt) metadata.sourceCheckedAt = sourceCheckedAt;
     return [metadata];
   });
@@ -234,11 +237,25 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function safeHttpsUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  try {
-    return new URL(value).protocol === "https:" ? value : undefined;
-  } catch {
-    return undefined;
+function preferredOfficialLink(
+  value: unknown,
+  relation: "source" | "apply",
+): { url: string; verifiedAt?: string } | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const candidate of value) {
+    const link = asRecord(candidate);
+    if (link.official !== true || link.rel !== relation || typeof link.url !== "string") {
+      continue;
+    }
+    try {
+      if (new URL(link.url).protocol !== "https:") continue;
+      return {
+        url: link.url,
+        ...(typeof link.verifiedAt === "string" ? { verifiedAt: link.verifiedAt } : {}),
+      };
+    } catch {
+      // The published schema rejects this; retain a defensive consumer guard.
+    }
   }
+  return undefined;
 }

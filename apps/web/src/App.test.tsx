@@ -184,7 +184,7 @@ describe("App", () => {
       trigger: { type: "query.submit", text: "부산 청년 창업 지원" },
       profile: { persona: "university_student" },
     });
-    expect(turnBodies[0]).not.toMatchObject({ profile: { region: "서울" } });
+    expect(turnBodies[0]).not.toMatchObject({ profile: { regionCode: "KR-11" } });
   });
 
   it("preserves trusted card titles and source metadata in the manipulation shell", async () => {

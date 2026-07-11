@@ -10,17 +10,18 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
-  BenefitDetailSchema,
   BenefitSearchResponseSchema,
   ChecklistResponseSchema,
-  RecommendationPersonaSchema,
-  RecommendationWeightsSchema,
+  GetBenefitDetailResponseSchema,
+  ListPersonasResponseSchema,
   UpcomingDeadlinesResponseSchema,
-  type BenefitDetail,
   type BenefitSearchResponse,
   type ChecklistResponse,
+  type GetBenefitDetailResponse,
+  type ListPersonasResponse,
   type UpcomingDeadlinesResponse,
   type UserProfile,
+  normalizeQuery,
 } from "@genui-canvas/contracts";
 
 // The gateway package only defines the ESM ("import") export condition, which
@@ -52,7 +53,11 @@ const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
 
 /** The LLM-free gateway receives only the SDK's safe runtime allowlist. */
 export function createGatewayEnvironment(dbPath: string): Record<string, string> {
-  return { ...getDefaultEnvironment(), MCP_GEN_UI_DB_PATH: dbPath };
+  return {
+    ...getDefaultEnvironment(),
+    MCP_GEN_UI_REPOSITORY_MODE: "fixture",
+    MCP_GEN_UI_DB_PATH: dbPath,
+  };
 }
 
 interface ToolContent {
@@ -66,15 +71,14 @@ interface GatewayToolResult {
   isError?: boolean;
 }
 
-const PersonaPresetSchema = z
-  .object({
-    id: RecommendationPersonaSchema,
-    description: z.string(),
-    weights: RecommendationWeightsSchema,
-  })
-  .strict();
-const PersonaListResponseSchema = z.object({ personas: z.array(PersonaPresetSchema) }).strict();
-export type PersonaListResponse = z.infer<typeof PersonaListResponseSchema>;
+export class GatewayCompatibilityError extends Error {
+  readonly code = "unsupported_gateway_schema";
+
+  constructor() {
+    super("The gateway response schema version is not supported by this canvas.");
+    this.name = "GatewayCompatibilityError";
+  }
+}
 
 /** Validate both current text-only and future structured MCP tool responses. */
 export function parseGatewayToolResult<TSchema extends z.ZodTypeAny>(
@@ -103,7 +107,18 @@ export function parseGatewayToolResult<TSchema extends z.ZodTypeAny>(
 
   const value = result.structuredContent ?? textValue;
   if (value === undefined) throw new Error("Gateway returned no structured output");
-  return schema.parse(value) as z.output<TSchema>;
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    if (
+      isRecord(value) &&
+      typeof value.schemaVersion === "string" &&
+      parsed.error.issues.some((issue) => issue.path[0] === "schemaVersion")
+    ) {
+      throw new GatewayCompatibilityError();
+    }
+    throw parsed.error;
+  }
+  return parsed.data as z.output<TSchema>;
 }
 
 /**
@@ -160,11 +175,15 @@ export class GatewayClient {
     query: string,
     profile: UserProfile | Record<string, unknown> = {},
   ): Promise<BenefitSearchResponse> {
-    return this.call("searchBenefits", { query, profile }, BenefitSearchResponseSchema);
+    return this.call(
+      "searchBenefits",
+      { query: normalizeQuery(query), profile },
+      BenefitSearchResponseSchema,
+    );
   }
 
-  getBenefitDetail(id: string): Promise<BenefitDetail> {
-    return this.call("getBenefitDetail", { id }, BenefitDetailSchema);
+  getBenefitDetail(id: string): Promise<GetBenefitDetailResponse> {
+    return this.call("getBenefitDetail", { id }, GetBenefitDetailResponseSchema);
   }
 
   buildChecklist(benefitId: string): Promise<ChecklistResponse> {
@@ -177,12 +196,16 @@ export class GatewayClient {
     return this.call("getUpcomingDeadlines", { profile }, UpcomingDeadlinesResponseSchema);
   }
 
-  listPersonas(): Promise<PersonaListResponse> {
-    return this.call("listPersonas", {}, PersonaListResponseSchema);
+  listPersonas(): Promise<ListPersonasResponse> {
+    return this.call("listPersonas", {}, ListPersonasResponseSchema);
   }
 
   async close(): Promise<void> {
     await this.client?.close();
     this.client = null;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -25,7 +25,7 @@ describe("safety boundaries", () => {
       { gateway, provider: new RuleBasedProvider() },
       {
         trigger: { type: "query.submit", text: "서울 대학생 지원" },
-        profile: { region: "서울", studentStatus: "student" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
         traceSummary: { entityEngagement: [], recentEvents: [], turnCount: 0 },
         currentComposition: { cards: [] },
       },
@@ -44,10 +44,14 @@ describe("safety boundaries", () => {
     const entityIds = [...new Set(result.spec.cards.map((card) => card.entityRef.entityId))].filter(
       (entityId) => entityId !== "upcoming-deadlines" && entityId !== "personas",
     );
-    const details = await Promise.all(
-      entityIds.map((entityId) => gateway.getBenefitDetail(entityId) as Promise<{ sourceUrl: string }>),
+    const details = await Promise.all(entityIds.map((entityId) => gateway.getBenefitDetail(entityId)));
+    const retrievedGatewayUrls = new Set(
+      details.flatMap((detail) =>
+        detail.result.links
+          .filter((link) => link.official && link.url.startsWith("https://"))
+          .map((link) => link.url),
+      ),
     );
-    const retrievedGatewayUrls = new Set(details.map((detail) => detail.sourceUrl));
 
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((url) => retrievedGatewayUrls.has(url))).toBe(true);
