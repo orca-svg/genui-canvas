@@ -131,7 +131,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "현재 연결된 게이트웨이 v0.2.0은 검증용 예시(fixture) 데이터를 제공합니다. 실제 정책 데이터가 아닙니다.",
+        "현재 연결된 게이트웨이 v0.3.0은 검증용 예시(fixture) 데이터를 제공합니다. 실제 정책 데이터가 아닙니다.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "혜택 검색" })).toHaveAttribute(
