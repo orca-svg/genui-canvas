@@ -1,3 +1,10 @@
+<div align="center">
+  <img src="docs/assets/logo.png" alt="genui-canvas" width="720" />
+  <br />
+  <br />
+  <img src="docs/assets/genui-canvas.gif" alt="genui-canvas: a query composes typed components into a ranked canvas" width="720" />
+</div>
+
 # genui-canvas
 
 Interaction-driven generative UI for the
