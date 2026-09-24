@@ -208,6 +208,29 @@ describe("hidden tail", () => {
     expect(result.spec.order).toEqual(["card-b", "card-a"]);
   });
 
+  it("keeps a hidden entity the provider re-emits under a renamed card id in the hidden tail", () => {
+    const spec = {
+      intentSummary: "x",
+      cards: [
+        {
+          cardId: "provider-renamed-a",
+          componentType: "BenefitCard" as const,
+          entityRef: { toolResult: "searchBenefits" as const, entityId: "a" },
+          props: {},
+          rationale: "r",
+        },
+        twoCardSpec().cards[1]!,
+      ],
+      order: ["provider-renamed-a", "card-b"],
+    };
+    const result = enforceManipulationInvariants(spec, hiddenA, cache());
+    // Matched by semantic key (BenefitCard::a), not by the shell's card id.
+    expect(result.hiddenCardIds).toEqual(["provider-renamed-a"]);
+    expect(result.spec.order).toEqual(["card-b", "provider-renamed-a"]);
+    expect(result.spec.cards.filter((card) => card.entityRef.entityId === "a")).toHaveLength(1);
+    expect(CompositionSpecSchema.safeParse(result.spec).success).toBe(true);
+  });
+
   it("drops the sub-cards of a hidden candidate instead of shipping them", () => {
     const c = cache();
     c.put("buildChecklist", "a", { benefitId: "a", items: [], caveats: [] });
