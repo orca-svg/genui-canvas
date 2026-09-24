@@ -33,7 +33,8 @@ try {
     report.traceClosedLoop &&
     report.pinnedMovedToTop &&
     report.hiddenRemoved &&
-    report.orderChanged;
+    report.orderChanged &&
+    report.subCardsComposed;
   // eslint-disable-next-line no-console
   console.log(
     passed

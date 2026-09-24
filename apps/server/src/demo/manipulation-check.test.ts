@@ -22,15 +22,27 @@ describe("runManipulationCheck (live gateway, rule-based)", () => {
     expect(report.httpBoundaryVerified).toBe(true);
     expect(report.traceClosedLoop).toBe(true);
     expect(report.recordedEventTypes).toEqual([
+      "session.start",
       "query.submit",
+      "tool.called",
       "composition.applied",
       "card.pin",
       "card.hide",
       "card.reorder",
       "card.expand",
       "query.submit",
+      "tool.called",
       "composition.applied",
     ]);
+    expect(report.controlComponentTypes).toEqual(["BenefitCard", "DeadlineList"]);
+    expect(report.manipulatedComponentTypes).toEqual([
+      "BenefitCard",
+      "Checklist",
+      "DeadlineList",
+      "ScoreBreakdown",
+      "SourceNotice",
+    ]);
+    expect(report.subCardsComposed).toBe(true);
     expect(report.observedTraceSummary).toMatchObject({
       orderingSignal: { userReordered: true },
       turnCount: 2,

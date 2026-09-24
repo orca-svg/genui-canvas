@@ -33,6 +33,10 @@ export interface ManipulationCheckReport {
   traceClosedLoop: boolean;
   recordedEventTypes: InteractionEvent["type"][];
   observedTraceSummary: TraceSummary;
+  controlComponentTypes: string[];
+  manipulatedComponentTypes: string[];
+  /** Expanded candidate gained Checklist+SourceNotice and the pinned one gained ScoreBreakdown. */
+  subCardsComposed: boolean;
 }
 
 type CompositionEvent = Extract<ServerEvent, { kind: "composition" }>;
@@ -58,10 +62,11 @@ function parseComposition(text: string): CompositionEvent {
   throw new Error("turn did not return a validated composition");
 }
 
-async function issueSession(app: App): Promise<string> {
+async function issueSession(app: App): Promise<{ sessionId: string; nextSeq: number }> {
   const response = await app.request("/api/session", { method: "POST" });
   if (!response.ok) throw new Error(`session failed with HTTP ${response.status}`);
-  return ((await response.json()) as { sessionId: string }).sessionId;
+  const body = (await response.json()) as { sessionId: string; nextSeq?: number };
+  return { sessionId: body.sessionId, nextSeq: body.nextSeq ?? 0 };
 }
 
 async function appendEvent(app: App, event: InteractionEvent): Promise<void> {
@@ -95,6 +100,10 @@ function benefitCards(composition: CompositionEvent) {
   );
 }
 
+function componentTypes(composition: CompositionEvent): string[] {
+  return [...new Set(visibleCards(composition).map((card) => card.componentType))].sort();
+}
+
 /**
  * Exercise the same HTTP and persisted-trace boundary as the browser:
  * session → events → turn → events → turn. The provider is observed rather
@@ -123,8 +132,8 @@ export async function runManipulationCheck(
 
   try {
     const profile = options.profile ?? {};
-    const sessionId = await issueSession(app);
-    let seq = 0;
+    const { sessionId, nextSeq } = await issueSession(app);
+    let seq = nextSeq;
 
     await appendEvent(
       app,
@@ -143,6 +152,7 @@ export async function runManipulationCheck(
       profile,
       currentComposition: { cards: [] },
     });
+    seq = control.nextSeq ?? seq;
     const controlCards = benefitCards(control);
     const controlOrder = controlCards.map((card) => card.entityId);
     if (controlCards.length < 3) {
@@ -298,6 +308,7 @@ export async function runManipulationCheck(
       profile,
       currentComposition: { cards: currentCards },
     });
+    seq = manipulated.nextSeq ?? seq;
     const manipulatedOrder = benefitCards(manipulated).map((card) => card.entityId);
 
     await appendEvent(
@@ -327,6 +338,14 @@ export async function runManipulationCheck(
       pinnedTrace?.pinned === true &&
       hiddenTrace?.hidden === true;
 
+    const manipulatedVisible = visibleCards(manipulated);
+    const has = (componentType: string, entityId: string) =>
+      manipulatedVisible.some((card) => card.componentType === componentType && card.entityId === entityId);
+    const subCardsComposed =
+      has("Checklist", reordered.entityId) &&
+      has("SourceNotice", reordered.entityId) &&
+      has("ScoreBreakdown", pinned.entityId);
+
     return {
       query: options.query,
       pinnedEntityId: pinned.entityId,
@@ -341,6 +360,9 @@ export async function runManipulationCheck(
       traceClosedLoop,
       recordedEventTypes: recorded.map((event) => event.type),
       observedTraceSummary,
+      controlComponentTypes: componentTypes(control),
+      manipulatedComponentTypes: componentTypes(manipulated),
+      subCardsComposed,
     };
   } finally {
     rmSync(traceDir, { recursive: true, force: true });
