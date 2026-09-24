@@ -2,6 +2,8 @@ import { z } from "zod";
 import { CatalogComponentTypeSchema, validateCatalogProps } from "./catalog.js";
 import { RecommendationPersonaSchema, StrictUserProfileSchema } from "./gateway.js";
 import {
+  CHECKLIST_MAX_ITEMS,
+  ChecklistItemIndexSchema,
   OpaqueEntityIdSchema,
   OpaqueIdentifierSchema,
   UserQueryTextSchema,
@@ -157,11 +159,11 @@ export type CompositionSpec = z.infer<typeof CompositionSpecSchema>;
 
 export const EntityEngagementSchema = z.object({
   entityId: OpaqueEntityIdSchema,
-  title: z.string().max(240),
   pinned: z.boolean(),
   hidden: z.boolean(),
   expandCount: z.number().int().nonnegative().max(10_000),
-  dwellRank: z.number().int().positive().max(100).optional(),
+  /** Sorted unique checklist rows the user ticked; derived from the trace, never stored elsewhere. */
+  checkedItems: z.array(ChecklistItemIndexSchema).max(CHECKLIST_MAX_ITEMS),
   lastAction: z.string().max(64).optional(),
 }).strict();
 export type EntityEngagement = z.infer<typeof EntityEngagementSchema>;

@@ -56,10 +56,10 @@ describe("composition prompts", () => {
           entityEngagement: [
             {
               entityId: "benefit-1",
-              title: hostileText,
               pinned: true,
               hidden: false,
               expandCount: 1,
+              checkedItems: [],
             },
           ],
           recentEvents: [],

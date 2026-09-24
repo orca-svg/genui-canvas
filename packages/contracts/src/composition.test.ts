@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CompositionSpecSchema,
   CompositionContextSchema,
+  EntityEngagementSchema,
   TraceSummarySchema,
 } from "./composition.js";
 
@@ -215,5 +216,19 @@ describe("CompositionContextSchema", () => {
       profile: {},
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("EntityEngagementSchema (trace-derived)", () => {
+  const base = { entityId: "national-scholarship", pinned: false, hidden: false, expandCount: 1 };
+
+  it("carries sorted checked rows and no display title", () => {
+    expect(EntityEngagementSchema.safeParse({ ...base, checkedItems: [0, 3] }).success).toBe(true);
+    expect(EntityEngagementSchema.safeParse({ ...base, title: "x", checkedItems: [] }).success).toBe(false);
+    expect(EntityEngagementSchema.safeParse({ ...base, dwellRank: 1, checkedItems: [] }).success).toBe(false);
+  });
+
+  it("rejects a checked row outside the 90-row bound", () => {
+    expect(EntityEngagementSchema.safeParse({ ...base, checkedItems: [90] }).success).toBe(false);
   });
 });
