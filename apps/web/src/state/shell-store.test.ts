@@ -72,3 +72,27 @@ describe("pinned-on-top invariant (property)", () => {
     expect(firstUnpinned === -1 || lastPinned < firstUnpinned).toBe(true);
   });
 });
+
+describe("checklist memo and hidden init", () => {
+  it("checklist.check adds a sorted unique row and uncheck removes it", () => {
+    let state = createShellState("comp-1", [
+      { cardId: "checklist-a", entityId: "national-scholarship", componentType: "Checklist", itemCount: 3 },
+    ]);
+    state = shellReducer(state, { type: "checklist.check", cardId: "checklist-a", itemIndex: 2 });
+    state = shellReducer(state, { type: "checklist.check", cardId: "checklist-a", itemIndex: 0 });
+    state = shellReducer(state, { type: "checklist.check", cardId: "checklist-a", itemIndex: 2 });
+    expect(state.cards[0]?.checkedItems).toEqual([0, 2]);
+    state = shellReducer(state, { type: "checklist.uncheck", cardId: "checklist-a", itemIndex: 0 });
+    expect(state.cards[0]?.checkedItems).toEqual([2]);
+  });
+
+  it("honours a hidden flag and emphasis from the composition metadata", () => {
+    const state = createShellState("comp-1", [
+      { cardId: "a", entityId: "x", componentType: "BenefitCard", emphasis: "primary" },
+      { cardId: "b", entityId: "y", componentType: "BenefitCard", hidden: true },
+    ]);
+    expect(state.cards[0]).toMatchObject({ hidden: false, emphasis: "primary", checkedItems: [] });
+    expect(state.cards[1]?.hidden).toBe(true);
+    expect(visibleCardIds(state)).toEqual(["a"]);
+  });
+});
