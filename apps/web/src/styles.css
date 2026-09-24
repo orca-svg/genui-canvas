@@ -409,21 +409,28 @@ input:disabled {
 }
 
 /* Interactive A2UI primitives inherit the shell's affordances. */
+.genui-canvas-card {
+  /* A2UI's CheckBox sizes itself from this property in an inline style. */
+  --a2ui-checkbox-size: 1.25rem;
+}
 .genui-canvas-card button,
 .genui-canvas-card input[type="checkbox"] {
   cursor: pointer;
 }
-.genui-canvas-card button:focus-visible,
-.genui-canvas-card input[type="checkbox"]:focus-visible {
+.genui-canvas-card button:focus-visible {
   outline: 3px solid #2563eb;
   outline-offset: 2px;
 }
+/* The CheckBox sets `outline: none` inline, so the ring is a box-shadow. */
+.genui-canvas-card input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px #2563eb;
+  border-radius: 4px;
+}
 @media (max-width: 48rem) {
+  .genui-canvas-card {
+    --a2ui-checkbox-size: 1.5rem;
+  }
   .genui-canvas-card button {
     min-height: 2.75rem;
-  }
-  .genui-canvas-card input[type="checkbox"] {
-    width: 1.5rem;
-    height: 1.5rem;
   }
 }
