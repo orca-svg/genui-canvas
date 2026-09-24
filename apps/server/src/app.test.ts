@@ -607,4 +607,47 @@ describe("server-side trace bookkeeping", () => {
     expect(error.message).not.toContain("boom");
     expect(traceStore.read(sessionId).map((e) => e.type)).toEqual(["session.start"]);
   });
+
+  it("still records tool.called and advances nextSeq when the provider output is rejected", async () => {
+    const secret = "internal-entity-super-secret";
+    const invalidApp = createApp({
+      gateway,
+      provider: {
+        name: "invalid-provider",
+        async compose() {
+          return {
+            intentSummary: "invalid",
+            cards: [
+              {
+                cardId: "private-card",
+                componentType: "BenefitCard",
+                entityRef: { toolResult: "searchBenefits", entityId: secret },
+                props: {},
+                rationale: "invalid reference",
+              },
+            ],
+            order: ["private-card"],
+          };
+        },
+      },
+      traceStore,
+    });
+    const sessionId = await issueSession(invalidApp);
+    const res = await invalidApp.request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        trigger: { type: "query.submit", text: "서울 대학생 지원" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
+        currentComposition: { cards: [] },
+      }),
+    });
+    const frames = sseFrames(await res.text());
+    const error = frames.find((f) => f.kind === "error") as { nextSeq: number; message: string } | undefined;
+    expect(error).toBeDefined();
+    expect(error?.nextSeq).toBe(2);
+    expect(error?.message).not.toContain(secret);
+    expect(traceStore.read(sessionId).map((e) => e.type)).toEqual(["session.start", "tool.called"]);
+  });
 });
