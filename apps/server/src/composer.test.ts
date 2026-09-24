@@ -124,7 +124,11 @@ describe("composeTurn semantic catalog hydration", () => {
 
     const result = await composeTurn({ gateway: fakeGateway, provider }, turn);
 
-    expect(result).toEqual({ ok: false, errors: ["Gateway returned an invalid opaque entity id"] });
+    expect(result).toEqual({
+      ok: false,
+      errors: ["Gateway returned an invalid opaque entity id"],
+      toolCalls: [{ name: "searchBenefits", calls: 1, failures: 0 }],
+    });
     expect(composeCalls).toBe(0);
   });
 
@@ -182,7 +186,7 @@ describe("composeTurn semantic catalog hydration", () => {
       async getUpcomingDeadlines() {
         return {
           profile: {},
-          results: [],
+          results: [{ ...benefit, applicationDeadline: "2026-08-01T00:00:00.000Z" }],
           generatedAt: "2026-07-10T00:00:00.000Z",
         };
       },
@@ -272,7 +276,78 @@ describe("composeTurn semantic catalog hydration", () => {
         title: "국가장학금 · 신청 준비",
         sourceUrl: "https://www.gov.kr/benefit",
         sourceCheckedAt: "2026-07-10T00:00:00.000Z",
+        itemCount: 0,
       });
     }
+  });
+});
+
+describe("composeTurn — ledger, hidden tail, sub-cards (live fixture gateway)", () => {
+  it("reports one tool-call summary per gateway tool used in the turn", async () => {
+    await gateway.connect();
+    const result = await composeTurn({ gateway, provider: new RuleBasedProvider() }, turn);
+    expect(result.toolCalls.map((t) => t.name).sort()).toEqual([
+      "buildChecklist",
+      "getBenefitDetail",
+      "getUpcomingDeadlines",
+      "listPersonas",
+      "searchBenefits",
+    ]);
+    expect(result.toolCalls.every((t) => t.calls >= 1 && t.failures === 0)).toBe(true);
+  });
+
+  it("ships a hidden candidate in the hidden tail with hidden metadata and drops its sub-cards", async () => {
+    await gateway.connect();
+    const control = await composeTurn({ gateway, provider: new RuleBasedProvider() }, turn);
+    if (!control.ok) throw new Error(control.errors.join(", "));
+    const first = control.spec.cards[0]!;
+    const result = await composeTurn(
+      { gateway, provider: new RuleBasedProvider() },
+      {
+        ...turn,
+        currentComposition: {
+          cards: [
+            {
+              cardId: first.cardId,
+              entityId: first.entityRef.entityId,
+              componentType: "BenefitCard",
+              pinned: false,
+              hidden: true,
+              expanded: true,
+            },
+          ],
+        },
+      },
+    );
+    if (!result.ok) throw new Error(result.errors.join(", "));
+    expect(result.hiddenCardIds).toEqual([first.cardId]);
+    expect(result.spec.order.at(-1)).toBe(first.cardId);
+    expect(result.cardMetadata.find((m) => m.cardId === first.cardId)?.hidden).toBe(true);
+    expect(result.spec.cards.some((c) => c.componentType === "Checklist" && c.entityRef.entityId === first.entityRef.entityId)).toBe(false);
+  });
+
+  it("composes Checklist and SourceNotice for an expanded candidate with a bounded itemCount", async () => {
+    await gateway.connect();
+    const control = await composeTurn({ gateway, provider: new RuleBasedProvider() }, turn);
+    if (!control.ok) throw new Error(control.errors.join(", "));
+    const first = control.spec.cards[0]!;
+    const result = await composeTurn(
+      { gateway, provider: new RuleBasedProvider() },
+      {
+        ...turn,
+        currentComposition: {
+          cards: [
+            { cardId: first.cardId, entityId: first.entityRef.entityId, componentType: "BenefitCard", pinned: true, hidden: false, expanded: true },
+          ],
+        },
+      },
+    );
+    if (!result.ok) throw new Error(result.errors.join(", "));
+    const types = result.spec.order.map((id) => result.spec.cards.find((c) => c.cardId === id)!.componentType);
+    expect(types.slice(0, 4)).toEqual(["BenefitCard", "ScoreBreakdown", "Checklist", "SourceNotice"]);
+    const checklistMeta = result.cardMetadata.find((m) => m.cardId === `checklist-${first.entityRef.entityId}`);
+    expect(checklistMeta?.itemCount).toBeGreaterThan(0);
+    expect(checklistMeta?.itemCount).toBeLessThanOrEqual(90);
+    expect(result.cardMetadata[0]?.emphasis).toBe("primary");
   });
 });
