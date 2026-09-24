@@ -64,6 +64,8 @@ export interface CompositionCardMetadata {
   hidden?: boolean;
   /** Checklist only: CheckBox rows bound to /checked{i}. */
   itemCount?: number;
+  /** Checklist only: trace-derived ticked rows (< itemCount) a new shell row starts from. */
+  checkedItems?: number[];
 }
 
 /** Per-turn count of gateway calls, recorded as one `tool.called` trace event. */
@@ -200,7 +202,12 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
     ok: true,
     spec: enforced.spec,
     messages,
-    cardMetadata: buildCardMetadata(enforced.spec, cache, new Set(enforced.hiddenCardIds)),
+    cardMetadata: buildCardMetadata(
+      enforced.spec,
+      cache,
+      new Set(enforced.hiddenCardIds),
+      expandContext.checkedItemsByEntity,
+    ),
     hiddenCardIds: enforced.hiddenCardIds,
     toolCalls: ledger.summary(),
   };
@@ -210,6 +217,7 @@ function buildCardMetadata(
   spec: CompositionSpec,
   cache: ToolResultCache,
   hiddenIds: Set<string>,
+  checkedItemsByEntity: ExpandContext["checkedItemsByEntity"],
 ): CompositionCardMetadata[] {
   return spec.order.flatMap((cardId) => {
     const card = spec.cards.find((candidate) => candidate.cardId === cardId);
@@ -240,7 +248,12 @@ function buildCardMetadata(
     if (card.componentType === "Checklist") {
       const checklist = asRecord(cache.get({ toolResult: "buildChecklist", entityId }));
       const items = Array.isArray(checklist.items) ? checklist.items : [];
-      metadata.itemCount = Math.min(items.length, CHECKLIST_MAX_ITEMS);
+      const itemCount = Math.min(items.length, CHECKLIST_MAX_ITEMS);
+      metadata.itemCount = itemCount;
+      // The same rows expand pre-fills as /checked{i}: true, so a shell row that
+      // re-enters the canvas starts from them instead of overwriting them.
+      const checked = (checkedItemsByEntity[entityId] ?? []).filter((index) => index < itemCount);
+      if (checked.length > 0) metadata.checkedItems = [...checked];
     }
     const sourceLink = preferredOfficialLink(detail.links, "source");
     if (sourceLink) metadata.sourceUrl = sourceLink.url;

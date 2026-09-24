@@ -147,4 +147,23 @@ describe("interactive A2UI subset", () => {
     ).toBe(true);
     expect(ServerEventSchema.safeParse({ kind: "error", message: "x", nextSeq: 2 }).success).toBe(true);
   });
+
+  it("carries bounded trace-derived checked rows on Checklist card metadata", () => {
+    const composition = (checkedItems: unknown) =>
+      ServerEventSchema.safeParse({
+        kind: "composition",
+        compositionId: "comp3",
+        messages: [],
+        cards: [{ cardId: "c1", componentType: "Checklist", entityId: "a", itemCount: 90, checkedItems }],
+      }).success;
+
+    expect(composition([])).toBe(true);
+    expect(composition([0, 2, 89])).toBe(true);
+    expect(composition(Array.from({ length: 90 }, (_, i) => i))).toBe(true);
+    expect(composition([90])).toBe(false);
+    expect(composition([-1])).toBe(false);
+    expect(composition([1.5])).toBe(false);
+    expect(composition(Array.from({ length: 91 }, () => 0))).toBe(false);
+    expect(composition("0")).toBe(false);
+  });
 });

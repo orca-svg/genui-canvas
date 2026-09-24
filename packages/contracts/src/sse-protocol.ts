@@ -2,7 +2,12 @@ import { z } from "zod";
 import { BASIC_CATALOG_ID } from "./a2ui.js";
 import { CatalogComponentTypeSchema } from "./catalog.js";
 import { RecommendationPersonaSchema } from "./gateway.js";
-import { CHECKLIST_MAX_ITEMS, OpaqueEntityIdSchema, OpaqueIdentifierSchema } from "./input.js";
+import {
+  CHECKLIST_MAX_ITEMS,
+  ChecklistItemIndexSchema,
+  OpaqueEntityIdSchema,
+  OpaqueIdentifierSchema,
+} from "./input.js";
 
 /**
  * The bounded A2UI v0.9 subset this project emits. Layout (Column/Row/Card/
@@ -138,6 +143,8 @@ export const CompositionCardSchema = z
     hidden: z.boolean().optional(),
     /** Checklist only: number of CheckBox rows bound to /checked{i}. */
     itemCount: z.number().int().min(0).max(CHECKLIST_MAX_ITEMS).optional(),
+    /** Checklist only: rows the trace says the user ticked; a new shell row starts from these. */
+    checkedItems: z.array(ChecklistItemIndexSchema).max(CHECKLIST_MAX_ITEMS).optional(),
   })
   .strict();
 export type CompositionCard = z.infer<typeof CompositionCardSchema>;

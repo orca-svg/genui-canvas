@@ -135,7 +135,12 @@ function toCurrentComposition(shell: ShellState): TurnBody["currentComposition"]
   };
 }
 
-/** Rebuild shell from a new composition, carrying over the user's flags. */
+/**
+ * Rebuild shell from a new composition, carrying over the user's flags. A row
+ * the shell already had keeps its local ticks; a row new to the shell starts
+ * from the server's trace-derived ticks, which the canvas data model already
+ * shows — starting it empty would write `false` over them.
+ */
 function mergeShell(prev: ShellState, compositionId: string, cards: CompositionCard[]): ShellState {
   const next = createShellState(compositionId, cards);
   const semanticFlags = new Map<string, ShellState["cards"][number]>();
@@ -158,7 +163,7 @@ function mergeShell(prev: ShellState, compositionId: string, cards: CompositionC
             expanded: old.expanded,
             checkedItems: old.checkedItems,
           }
-        : c;
+        : c; // new to the shell: keeps the server's checkedItems from createShellState
     }),
   };
 }

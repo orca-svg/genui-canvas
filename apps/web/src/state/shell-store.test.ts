@@ -95,4 +95,13 @@ describe("checklist memo and hidden init", () => {
     expect(state.cards[1]?.hidden).toBe(true);
     expect(visibleCardIds(state)).toEqual(["a"]);
   });
+
+  it("starts a Checklist row from the server's trace-derived checked rows", () => {
+    const serverRows = [0, 2];
+    const state = createShellState("comp-1", [
+      { cardId: "checklist-a", entityId: "x", componentType: "Checklist", itemCount: 3, checkedItems: serverRows },
+    ]);
+    expect(state.cards[0]?.checkedItems).toEqual([0, 2]);
+    expect(state.cards[0]?.checkedItems).not.toBe(serverRows);
+  });
 });

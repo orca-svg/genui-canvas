@@ -62,7 +62,17 @@ function sseFrame(event: Record<string, unknown>): string {
   return `event: ${String(event.kind)}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-function interactiveCompositionSse(options: { nextSeq?: number; hiddenEntityId?: string } = {}): string {
+interface InteractiveOptions {
+  nextSeq?: number;
+  hiddenEntityId?: string;
+  /** Trace-derived ticked rows the server pre-fills on checklist-a. */
+  checkedItems?: number[];
+  /** Compose without checklist-a (the candidate's Checklist drops out of this turn). */
+  withoutChecklist?: boolean;
+}
+
+function interactiveCompositionSse(options: InteractiveOptions = {}): string {
+  const checked0 = options.checkedItems?.includes(0) === true;
   const messages = [
     { version: "v0.9", createSurface: { surfaceId: "card-a", catalogId: CATALOG } },
     {
@@ -73,21 +83,25 @@ function interactiveCompositionSse(options: { nextSeq?: number; hiddenEntityId?:
       },
     },
     { version: "v0.9", updateDataModel: { surfaceId: "card-a", path: "/", value: { title: "혜택 A 본문" } } },
-    { version: "v0.9", createSurface: { surfaceId: "checklist-a", catalogId: CATALOG } },
-    {
-      version: "v0.9",
-      updateComponents: {
-        surfaceId: "checklist-a",
-        components: [
-          { id: "root", component: "Column", children: ["check-0"] },
-          { id: "check-0", component: "CheckBox", label: { path: "/item0Text" }, value: { path: "/checked0" } },
-        ],
-      },
-    },
-    {
-      version: "v0.9",
-      updateDataModel: { surfaceId: "checklist-a", path: "/", value: { item0Text: "재학증명서", checked0: false } },
-    },
+    ...(options.withoutChecklist
+      ? []
+      : [
+          { version: "v0.9", createSurface: { surfaceId: "checklist-a", catalogId: CATALOG } },
+          {
+            version: "v0.9",
+            updateComponents: {
+              surfaceId: "checklist-a",
+              components: [
+                { id: "root", component: "Column", children: ["check-0"] },
+                { id: "check-0", component: "CheckBox", label: { path: "/item0Text" }, value: { path: "/checked0" } },
+              ],
+            },
+          },
+          {
+            version: "v0.9",
+            updateDataModel: { surfaceId: "checklist-a", path: "/", value: { item0Text: "재학증명서", checked0 } },
+          },
+        ]),
     { version: "v0.9", createSurface: { surfaceId: "personas", catalogId: CATALOG } },
     {
       version: "v0.9",
@@ -125,7 +139,18 @@ function interactiveCompositionSse(options: { nextSeq?: number; hiddenEntityId?:
   ];
   const cards = [
     { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "혜택 A", emphasis: "primary" },
-    { cardId: "checklist-a", entityId: "a", componentType: "Checklist", title: "혜택 A · 신청 준비", itemCount: 1 },
+    ...(options.withoutChecklist
+      ? []
+      : [
+          {
+            cardId: "checklist-a",
+            entityId: "a",
+            componentType: "Checklist",
+            title: "혜택 A · 신청 준비",
+            itemCount: 1,
+            ...(options.checkedItems ? { checkedItems: options.checkedItems } : {}),
+          },
+        ]),
     { cardId: "personas", componentType: "PersonaSelector", title: "추천 관점" },
     ...(options.hiddenEntityId
       ? [{ cardId: `card-${options.hiddenEntityId}`, entityId: options.hiddenEntityId, componentType: "BenefitCard", title: "숨긴 혜택", hidden: true }]
@@ -138,7 +163,7 @@ function interactiveCompositionSse(options: { nextSeq?: number; hiddenEntityId?:
 }
 
 /** fetch mock: session → interactive composition on every turn; collects event and turn bodies. */
-function interactiveFetch(options: { nextSeq?: number; hiddenEntityId?: string; sessionNextSeq?: number } = {}) {
+function interactiveFetch(options: InteractiveOptions & { sessionNextSeq?: number } = {}) {
   const eventBodies: Array<Record<string, unknown>> = [];
   const turnBodies: Array<Record<string, unknown>> = [];
   const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -881,5 +906,58 @@ describe("App — interactive catalog", () => {
     await user.click(screen.getByRole("button", { name: "청년 구직자" }));
     await waitFor(() => expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" })).toBeInTheDocument();
+  });
+
+  it("starts a re-entering Checklist from the server's checked rows without posting a tick", async () => {
+    const eventBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          eventBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          // turn 1: Checklist with a ticked row; turn 2: without it; turn 3: back again
+          const body = interactiveCompositionSse(
+            turns === 2 ? { withoutChecklist: true } : { checkedItems: [0] },
+          );
+          return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const applied = () => eventBodies.filter((e) => e.type === "composition.applied").length;
+    const ticks = () =>
+      eventBodies.filter((e) => e.type === "checklist.check" || e.type === "checklist.uncheck");
+    const box = () => screen.getByRole("checkbox", { name: "재학증명서" }) as HTMLInputElement;
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(applied()).toBe(1));
+    expect(box().checked).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await waitFor(() => expect(applied()).toBe(2));
+    expect(screen.queryByRole("checkbox", { name: "재학증명서" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(applied()).toBe(3));
+    expect(box().checked).toBe(true);
+    expect(ticks()).toEqual([]);
+
+    // The shell row owns the tick now: clearing it records an uncheck.
+    await user.click(box());
+    await waitFor(() => expect(ticks().at(-1)).toMatchObject({ type: "checklist.uncheck", payload: { itemIndex: 0 } }));
   });
 });

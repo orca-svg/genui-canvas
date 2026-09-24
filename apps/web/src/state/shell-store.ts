@@ -39,6 +39,8 @@ export interface ShellCardInit {
   itemCount?: number;
   /** Shipped in the hidden tail: starts hidden, can be unhidden locally. */
   hidden?: boolean;
+  /** Checklist only: rows the server's trace summary says were ticked; a new row starts from them. */
+  checkedItems?: number[];
 }
 
 export type ShellAction =
@@ -58,12 +60,12 @@ export type ShellAction =
 export function createShellState(compositionId: string, cards: ShellCardInit[]): ShellState {
   return {
     compositionId,
-    cards: cards.map(({ hidden, ...card }) => ({
+    cards: cards.map(({ hidden, checkedItems, ...card }) => ({
       ...card,
       pinned: false,
       hidden: hidden === true,
       expanded: false,
-      checkedItems: [],
+      checkedItems: [...(checkedItems ?? [])],
     })),
   };
 }

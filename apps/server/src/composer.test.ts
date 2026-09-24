@@ -350,4 +350,38 @@ describe("composeTurn — ledger, hidden tail, sub-cards (live fixture gateway)"
     expect(checklistMeta?.itemCount).toBeLessThanOrEqual(90);
     expect(result.cardMetadata[0]?.emphasis).toBe("primary");
   });
+
+  it("carries the trace-derived checked rows on the Checklist metadata", async () => {
+    await gateway.connect();
+    const control = await composeTurn({ gateway, provider: new RuleBasedProvider() }, turn);
+    if (!control.ok) throw new Error(control.errors.join(", "));
+    const first = control.spec.cards[0]!;
+    const entityId = first.entityRef.entityId;
+    const result = await composeTurn(
+      { gateway, provider: new RuleBasedProvider() },
+      {
+        ...turn,
+        traceSummary: {
+          entityEngagement: [
+            // Row 89 lies beyond the fixture checklist and must be filtered out.
+            { entityId, pinned: false, hidden: false, expandCount: 1, checkedItems: [0, 89] },
+          ],
+          recentEvents: [],
+          turnCount: 1,
+        },
+        currentComposition: {
+          cards: [
+            { cardId: first.cardId, entityId, componentType: "BenefitCard", pinned: false, hidden: false, expanded: true },
+          ],
+        },
+      },
+    );
+    if (!result.ok) throw new Error(result.errors.join(", "));
+    const checklistMeta = result.cardMetadata.find((m) => m.cardId === `checklist-${entityId}`);
+    expect(checklistMeta?.itemCount).toBeGreaterThan(0);
+    expect(checklistMeta?.itemCount).toBeLessThan(90);
+    expect(checklistMeta?.checkedItems).toEqual([0]);
+    // Only the Checklist carries checked rows.
+    expect(result.cardMetadata.filter((m) => m.checkedItems !== undefined)).toHaveLength(1);
+  });
 });
