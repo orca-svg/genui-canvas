@@ -179,7 +179,7 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
     request.currentComposition,
     cache,
     request.traceSummary.orderingSignal?.userReordered === true,
-  );
+  ).spec;
   const messages = expandComposition(spec, cache);
   return { ok: true, spec, messages, cardMetadata: buildCardMetadata(spec, cache) };
 }

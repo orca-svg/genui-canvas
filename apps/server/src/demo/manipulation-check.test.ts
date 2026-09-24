@@ -17,7 +17,6 @@ describe("runManipulationCheck (live gateway, rule-based)", () => {
     );
 
     expect(report.pinnedMovedToTop).toBe(true);
-    expect(report.hiddenRemoved).toBe(true);
     expect(report.orderChanged).toBe(true);
     expect(report.httpBoundaryVerified).toBe(true);
     expect(report.traceClosedLoop).toBe(true);
@@ -41,8 +40,8 @@ describe("runManipulationCheck (live gateway, rule-based)", () => {
         expect.objectContaining({ entityId: report.hiddenEntityId, hidden: true }),
       ]),
     );
-    // the control included the entity that gets hidden; the manipulated run does not
+    // the control included the entity that gets hidden; the manipulated run now ships it in the hidden tail
     expect(report.controlOrder).toContain(report.hiddenEntityId);
-    expect(report.manipulatedOrder).not.toContain(report.hiddenEntityId);
+    expect(report.manipulatedOrder).toContain(report.hiddenEntityId);
   }, 30000);
 });
