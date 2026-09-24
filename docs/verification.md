@@ -39,13 +39,15 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | --- | --- |
 | Contracts | Strict valid/invalid fixtures for `CompositionSpec`, exact card/order set, component↔tool discriminants, opaque IDs, bounded query/profile/trace, type-specific interaction payloads, HTTPS source metadata, and the supported A2UI subset. |
 | Renderer | Escaped A2UI text renders; empty/late surfaces work; shell order and hidden filtering work; preview/expanded wrappers and IDs remain stable; tests finish without React `act` warnings. |
+| Interactive catalog | Wire schema accepts only `Card`/`Column`/`Row`/`Divider`/`Text`, `Button` with a named canvas action, and `CheckBox` bound to a path; renderer relays Button actions and CheckBox edits to the shell and writes shell-owned values back; the shell re-validates every action before mapping it to `persona.switch`. |
 | Shell UX | Custom query and persona are composition points; pin/hide/preview/reorder are immediate; pinned-first invariant holds; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
 | Trace/API | Server-issued UUID session, no path traversal, seq starts at zero, gap/different duplicate rejected, exact retry idempotent, unknown sessions rejected, request objects strict, error details hidden, CORS allowlisted. |
+| Trace bookkeeping | `session.start` at seq 0, one `tool.called` per turn, `nextSeq` on terminal events, client events continue the server sequence, bookkeeping rows excluded from the provider's recent history. |
 | Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
 | Model boundary | Prompt contains no raw query, title, summary, URL, or profile string; only safe semantic projection; strict structured output and hallucinated references are rejected. |
-| Manipulation invariants | Hidden cards cannot be resurfaced, pinned cards cannot be dropped/buried, explicit reorder survives, and deterministic expansion preserves trusted tool data. |
+| Manipulation invariants | Hidden cards never enter the visible order but ship in a hidden tail the shell can unhide; pinned cards cannot be dropped/buried; explicit reorder survives; expanded → Checklist+SourceNotice, pinned → ScoreBreakdown, ticked rows keep Checklist; deterministic expansion preserves trusted tool data. |
 | Trust copy | Scores say “relative relevance, not eligibility probability”; `conflict_detected` remains a candidate-level verification warning; source health/freshness and non-adjudication caveats remain visible; no definitive eligibility wording. |
-| CI replay | Actual session→event→turn routes persist the exact eight-event sequence and the second provider request observes server-derived pin/hide/reorder/expand signals. |
+| CI replay | Actual session→event→turn routes persist the full eleven-event sequence (including `session.start` and `tool.called` bookkeeping rows) and the second provider request observes server-derived pin/hide/reorder/expand signals. |
 
 ## Closed-loop proof
 
@@ -79,24 +81,31 @@ The replay must report all of the following as `true`:
 - `pinnedMovedToTop`
 - `hiddenRemoved`
 - `orderChanged`
+- `subCardsComposed`
 
 It must persist these types in this order:
 
 ```text
+session.start
 query.submit
+tool.called
 composition.applied
 card.pin
 card.hide
 card.reorder
 card.expand
 query.submit
+tool.called
 composition.applied
 ```
 
 `observedTraceSummary.turnCount` must be `2`; its ordering signal must be true;
-the pinned and hidden entity flags must match the scripted actions. This is not
-a direct state→composer injection: session validation, event persistence,
-server summarization, SSE contract parsing, and both HTTP turns are exercised.
+the pinned and hidden entity flags must match the scripted actions.
+`controlComponentTypes` must be `["BenefitCard", "DeadlineList"]` and
+`manipulatedComponentTypes` must add `Checklist`, `ScoreBreakdown`, and
+`SourceNotice`. This is not a direct state→composer injection: session
+validation, event persistence, server summarization, SSE contract parsing, and
+both HTTP turns are exercised.
 
 The optional `demo:replay:live` is diagnostic only and must never replace the
 deterministic release gate.
@@ -128,6 +137,12 @@ Required manual/browser checks:
    card state, reorder, hide/unhide, pin/unpin, and preview/expand actions.
 10. Browser console contains no application errors during query, manipulation,
     recomposition, persona switch, source opening, and simulated server failure.
+11. Persona buttons inside a `PersonaSelector` card and checklist CheckBoxes are
+    reachable by keyboard, have a visible focus ring, and meet the 44 CSS-pixel
+    target at the mobile breakpoint. Clicking a persona button changes the
+    sidebar persona control to the same value and starts a composition.
+12. After "조작 반영해 재구성", a card hidden earlier still appears in the
+    card-control list as hidden and "다시 보기" shows it immediately.
 
 Retain screenshots and console/overflow measurements with the release record;
 do not infer this gate from unit tests alone.
@@ -146,6 +161,12 @@ do not infer this gate from unit tests alone.
   duplicate surface, missing order entry, or wrong tool/component pair.
 - Gateway/provider failures expose stable user-facing messages, not internal
   errors, upstream bodies, API keys, or paths.
+- Because server-originated rows (`session.start`, `tool.called`) share the
+  session sequence, "exact retry is idempotent" now holds for the client's
+  most recent event only; the web client awaits the triggering event's
+  acknowledgement before starting a turn and disables every manipulation
+  control while a turn is busy, so no client event can be left unacknowledged
+  when a server row lands.
 
 ## Current claim limits
 
