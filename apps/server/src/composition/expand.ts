@@ -1,4 +1,12 @@
-import { BASIC_CATALOG_ID, type CardSpec, type CompositionSpec } from "@genui-canvas/contracts";
+import {
+  BASIC_CATALOG_ID,
+  CHECKLIST_MAX_ITEMS,
+  RecommendationPersonaSchema,
+  type A2uiBasicComponent,
+  type CanvasAction,
+  type CardSpec,
+  type CompositionSpec,
+} from "@genui-canvas/contracts";
 import type { ToolResultCache } from "./tool-cache.js";
 
 export interface A2uiMessage {
@@ -6,22 +14,39 @@ export interface A2uiMessage {
   [key: string]: unknown;
 }
 
+/** Trace-derived state the deterministic expander needs beyond the tool cache. */
+export interface ExpandContext {
+  /** entityId → sorted checklist rows the user ticked (server trace summary). */
+  checkedItemsByEntity: Record<string, readonly number[]>;
+  /** Persona whose selector button renders as the current choice. */
+  activePersonaId?: string;
+}
+
+export const EMPTY_EXPAND_CONTEXT: ExpandContext = { checkedItemsByEntity: {} };
+
+type Component = A2uiBasicComponent;
+
 interface CardBody {
-  components: Array<Record<string, unknown>>;
+  components: Component[];
   value: Record<string, unknown>;
 }
 
-// Leaves room for each card's fixed heading/caveat/rationale children under
-// the wire contract's 100-child limit.
-const MAX_DYNAMIC_TEXT_ITEMS = 96;
+/** Dynamic rows per card; fixed heading/divider/caveat children fit under the 100-child limit. */
+const MAX_DYNAMIC_ROWS = CHECKLIST_MAX_ITEMS;
+/** Persona rows use two children each (button + description). */
+const MAX_PERSONA_ROWS = 40;
 
 /**
  * Deterministically expand a validated CompositionSpec into A2UI v0.9 messages,
- * pulling real data from the tool cache. Approach A: each semantic card becomes
- * a subtree of primitive components (Column/Text). The LLM chose *what*; this
- * function decides *how*, reproducibly (same input → identical output).
+ * pulling real data from the tool cache. Each semantic card becomes a Card →
+ * Column subtree of layout, text, and the two interactive primitives. The
+ * provider chose *what*; this function decides *how*, reproducibly.
  */
-export function expandComposition(spec: CompositionSpec, cache: ToolResultCache): A2uiMessage[] {
+export function expandComposition(
+  spec: CompositionSpec,
+  cache: ToolResultCache,
+  context: ExpandContext = EMPTY_EXPAND_CONTEXT,
+): A2uiMessage[] {
   const byId = new Map(spec.cards.map((card) => [card.cardId, card]));
   const messages: A2uiMessage[] = [];
 
@@ -29,17 +54,20 @@ export function expandComposition(spec: CompositionSpec, cache: ToolResultCache)
     const card = byId.get(cardId);
     if (!card) continue;
     const data = cache.get(card.entityRef);
-    // A referenced-but-uncached entity was already rejected by validate; guard
-    // here too so expand never emits a surface with no data to bind.
     if (data === undefined) continue;
-    messages.push(...expandCard(card, data, cache));
+    messages.push(...expandCard(card, data, cache, context));
   }
 
   return messages;
 }
 
-function expandCard(card: CardSpec, data: unknown, cache: ToolResultCache): A2uiMessage[] {
-  const { components, value } = buildCardBody(card, data, cache);
+function expandCard(
+  card: CardSpec,
+  data: unknown,
+  cache: ToolResultCache,
+  context: ExpandContext,
+): A2uiMessage[] {
+  const { components, value } = buildCardBody(card, data, cache, context);
   return [
     { version: "v0.9", createSurface: { surfaceId: card.cardId, catalogId: BASIC_CATALOG_ID } },
     { version: "v0.9", updateComponents: { surfaceId: card.cardId, components } },
@@ -47,23 +75,359 @@ function expandCard(card: CardSpec, data: unknown, cache: ToolResultCache): A2ui
   ];
 }
 
-function buildCardBody(card: CardSpec, data: unknown, cache: ToolResultCache): CardBody {
+function buildCardBody(
+  card: CardSpec,
+  data: unknown,
+  cache: ToolResultCache,
+  context: ExpandContext,
+): CardBody {
   switch (card.componentType) {
     case "BenefitCard":
       return benefitCardBody(card, data, cache);
     case "ScoreBreakdown":
       return scoreBreakdownBody(card, data);
     case "Checklist":
-      return checklistBody(card, data);
+      return checklistBody(card, data, context);
     case "DeadlineList":
       return deadlineListBody(card, data);
     case "PersonaSelector":
-      return personaSelectorBody(card, data);
+      return personaSelectorBody(card, data, context);
     case "SourceNotice":
       return sourceNoticeBody(card, data);
     default:
       return assertNever(card);
   }
+}
+
+// --- primitive builders -----------------------------------------------------
+
+type TextVariant = "h1" | "h2" | "h3" | "h4" | "h5" | "caption" | "body";
+
+function text(id: string, path: string, variant?: TextVariant): Component {
+  return { id, component: "Text", text: { path }, ...(variant ? { variant } : {}) };
+}
+function column(id: string, children: string[]): Component {
+  return { id, component: "Column", children };
+}
+function row(id: string, children: string[]): Component {
+  return { id, component: "Row", children, align: "center" };
+}
+function divider(id: string): Component {
+  return { id, component: "Divider" };
+}
+function checkbox(id: string, labelPath: string, valuePath: string): Component {
+  return { id, component: "CheckBox", label: { path: labelPath }, value: { path: valuePath } };
+}
+function button(
+  id: string,
+  child: string,
+  action: CanvasAction,
+  variant: "default" | "primary" = "default",
+): Component {
+  return { id, component: "Button", child, variant, action: { event: action } };
+}
+/** Every surface is a Card whose single child is the body Column. */
+function shell(children: string[], rest: Component[]): Component[] {
+  return [{ id: "root", component: "Card", child: "body" }, column("body", children), ...rest];
+}
+
+// --- card bodies ------------------------------------------------------------
+
+function benefitCardBody(
+  card: Extract<CardSpec, { componentType: "BenefitCard" }>,
+  data: unknown,
+  cache: ToolResultCache,
+): CardBody {
+  const benefit = asRecord(data);
+  const detailResponse = asRecord(
+    cache.get({ toolResult: "getBenefitDetail", entityId: card.entityRef.entityId }),
+  );
+  const detail = asRecord(detailResponse.result);
+  const assessment = asRecord(benefit.assessment);
+  const ranking = asRecord(benefit.ranking);
+  const score = typeof ranking.score === "number" ? ranking.score : 0;
+  const showScore = card.props.showScore !== false;
+  const showReasons = card.props.showReasons !== false;
+  const reasons = Array.isArray(assessment.constraints)
+    ? assessment.constraints
+        .filter(isRecord)
+        .flatMap((constraint) => stringValue(constraint.explanation) ?? [])
+        .slice(0, MAX_DYNAMIC_ROWS)
+    : [];
+  const missingInfo = stringArray(assessment.missingInfo).slice(0, MAX_DYNAMIC_ROWS);
+  const scoreBreakdown = Array.isArray(ranking.breakdown)
+    ? ranking.breakdown.slice(0, MAX_DYNAMIC_ROWS)
+    : [];
+  const sourceLink = preferredOfficialLink(detail.links, "source");
+  const sourceUrl = sourceLink?.url;
+
+  const value: Record<string, unknown> = {
+    title: String(benefit.title ?? ""),
+    provider: String(benefit.provider ?? ""),
+    summary: String(benefit.summary ?? ""),
+    status: String(assessment.status ?? "candidate"),
+    statusLabel: recommendationStatusLabel(assessment.status),
+    scoreLabel: relativeScoreLabel(score),
+    scoreValueText: `상대 관련도 ${Math.round(score * 100)}/100`,
+    scoreCaveatText: "자격 확률 아님",
+    reasons,
+    reasonsText: reasons.length > 0 ? `추천 근거: ${reasons.join(" · ")}` : "추천 근거: 제공되지 않음",
+    missingInfo,
+    missingInfoText:
+      missingInfo.length > 0 ? `확인 필요: ${missingInfo.join(" · ")}` : "추가로 확인할 정보가 없습니다.",
+    scoreBreakdown,
+    scoreBreakdownText: scoreBreakdownLabel(scoreBreakdown),
+    rationale: card.rationale,
+    rationaleText: `구성 이유: ${card.rationale}`,
+    candidateCaveat:
+      "이 추천은 자격 판정이 아닌 후보 안내입니다. 출처 링크가 해당 기관 공식 주소인지 확인한 뒤 최신 요건을 확인하세요.",
+  };
+  if (sourceUrl) {
+    value.sourceUrl = sourceUrl;
+    value.sourceText = `공식 출처 · 상태 ${sourceLink?.health ?? "unknown"}: ${sourceUrl}`;
+  }
+
+  const children = [
+    "title",
+    "provider",
+    "status",
+    "summary",
+    "divider-1",
+    ...(showScore ? ["scoreRow", "scoreBreakdown"] : []),
+    ...(showReasons ? ["reasons"] : []),
+    "missingInfo",
+    "divider-2",
+    "rationale",
+    "candidateCaveat",
+    ...(sourceUrl ? ["source"] : []),
+  ];
+  const components: Component[] = [
+    text("title", "/title", "h3"),
+    text("provider", "/provider", "caption"),
+    text("status", "/statusLabel", "body"),
+    text("summary", "/summary", "body"),
+    divider("divider-1"),
+    text("reasons", "/reasonsText", "body"),
+    text("missingInfo", "/missingInfoText", "body"),
+    divider("divider-2"),
+    text("rationale", "/rationaleText", "caption"),
+    text("candidateCaveat", "/candidateCaveat", "caption"),
+  ];
+  if (showScore) {
+    components.push(
+      row("scoreRow", ["scoreValue", "scoreCaveat"]),
+      text("scoreValue", "/scoreValueText", "h4"),
+      text("scoreCaveat", "/scoreCaveatText", "caption"),
+      text("scoreBreakdown", "/scoreBreakdownText", "caption"),
+    );
+  }
+  if (sourceUrl) components.push(text("source", "/sourceText", "caption"));
+
+  return { components: shell(children, components), value };
+}
+
+function scoreBreakdownBody(
+  card: Extract<CardSpec, { componentType: "ScoreBreakdown" }>,
+  data: unknown,
+): CardBody {
+  const benefit = asRecord(data);
+  const ranking = asRecord(benefit.ranking);
+  const score = typeof ranking.score === "number" ? ranking.score : 0;
+  const rawItems = Array.isArray(ranking.breakdown) ? ranking.breakdown.filter(isRecord) : [];
+  const maxItems =
+    typeof card.props.maxItems === "number"
+      ? Math.min(MAX_DYNAMIC_ROWS, Math.max(1, Math.floor(card.props.maxItems)))
+      : MAX_DYNAMIC_ROWS;
+  const items = rawItems.slice(0, maxItems);
+
+  const value: Record<string, unknown> = {
+    heading: "상대 관련도 구성",
+    benefitTitle: String(benefit.title ?? ""),
+    score,
+    scoreLabel: relativeScoreLabel(score),
+    scoreText: relativeScoreLabel(score),
+    scoreValueText: `상대 관련도 ${Math.round(score * 100)}/100`,
+    scoreCaveatText: "자격 확률 아님",
+    items,
+    rationale: card.rationale,
+    rationaleText: `표시 이유: ${card.rationale}`,
+  };
+  const itemIds = items.map((item, index) => {
+    value[`item${index}Text`] = scoreDimensionText(item);
+    return `item-${index}`;
+  });
+
+  return {
+    value,
+    components: shell(
+      ["heading", "benefitTitle", "scoreRow", "divider-1", ...itemIds, "rationale"],
+      [
+        text("heading", "/heading", "h3"),
+        text("benefitTitle", "/benefitTitle", "h4"),
+        row("scoreRow", ["scoreValue", "scoreCaveat"]),
+        text("scoreValue", "/scoreValueText", "h4"),
+        text("scoreCaveat", "/scoreCaveatText", "caption"),
+        divider("divider-1"),
+        ...itemIds.map((id, index) => text(id, `/item${index}Text`, "body")),
+        text("rationale", "/rationaleText", "caption"),
+      ],
+    ),
+  };
+}
+
+function checklistBody(
+  card: Extract<CardSpec, { componentType: "Checklist" }>,
+  data: unknown,
+  context: ExpandContext,
+): CardBody {
+  const checklist = asRecord(data);
+  const items = Array.isArray(checklist.items)
+    ? checklist.items.filter(isRecord).slice(0, MAX_DYNAMIC_ROWS)
+    : [];
+  const caveats = stringArray(checklist.caveats).slice(0, MAX_DYNAMIC_ROWS);
+  const compact = card.props.compact === true;
+  const checked = new Set(context.checkedItemsByEntity[card.entityRef.entityId] ?? []);
+  const requiredCount = items.filter((item) => item.required === true).length;
+  const checkedCount = items.filter((_, index) => checked.has(index)).length;
+  const value: Record<string, unknown> = {
+    heading: "신청 준비 체크리스트",
+    benefitId: String(checklist.benefitId ?? card.entityRef.entityId),
+    items,
+    requiredCount,
+    checkedCount,
+    progressText: `필수 ${requiredCount}개 · 전체 ${items.length}개 · 체크 ${checkedCount}개`,
+    caveats,
+    caveatText:
+      caveats.length > 0 ? `확인 사항: ${caveats.join(" · ")}` : "체크리스트는 공식 공고와 대조해 확인하세요.",
+    memoNotice: "체크는 이 기기에서의 준비 메모이며 신청 상태가 아닙니다.",
+    rationale: card.rationale,
+    rationaleText: `표시 이유: ${card.rationale}`,
+  };
+  const rowIds = items.map((item, index) => {
+    value[`item${index}Text`] = checklistItemText(item, compact);
+    value[`checked${index}`] = checked.has(index);
+    return `check-${index}`;
+  });
+
+  return {
+    value,
+    components: shell(
+      ["heading", "progress", "divider-1", ...rowIds, "divider-2", "caveat", "memoNotice", "rationale"],
+      [
+        text("heading", "/heading", "h3"),
+        text("progress", "/progressText", "caption"),
+        divider("divider-1"),
+        ...rowIds.map((id, index) => checkbox(id, `/item${index}Text`, `/checked${index}`)),
+        divider("divider-2"),
+        text("caveat", "/caveatText", "caption"),
+        text("memoNotice", "/memoNotice", "caption"),
+        text("rationale", "/rationaleText", "caption"),
+      ],
+    ),
+  };
+}
+
+function deadlineListBody(
+  card: Extract<CardSpec, { componentType: "DeadlineList" }>,
+  data: unknown,
+): CardBody {
+  const response = asRecord(data);
+  const allResults = Array.isArray(response.results) ? response.results.filter(isRecord) : [];
+  const responseWindow = typeof response.withinDays === "number" ? response.withinDays : undefined;
+  const requestedWindow =
+    typeof card.props.withinDays === "number" ? card.props.withinDays : undefined;
+  const withinDays = requestedWindow ?? responseWindow;
+  const generatedAt = typeof response.generatedAt === "string" ? response.generatedAt : "";
+  const results = filterDeadlineResults(allResults, requestedWindow, generatedAt).slice(
+    0,
+    MAX_DYNAMIC_ROWS,
+  );
+  const value: Record<string, unknown> = {
+    heading: withinDays === undefined ? "다가오는 신청 마감" : `향후 ${withinDays}일 신청 마감`,
+    withinDays,
+    generatedAt,
+    results,
+    resultCount: results.length,
+    countText: `${results.length}개 후보`,
+    rationale: card.rationale,
+    rationaleText: `표시 이유: ${card.rationale}`,
+    candidateCaveat:
+      "마감 일정과 자격 요건은 변경될 수 있습니다. 신청 전 공식 공고에서 다시 확인하세요.",
+  };
+  const rowIds = results.map((result, index) => {
+    value[`deadline${index}Text`] = deadlineResultText(result);
+    return `deadline-${index}`;
+  });
+
+  return {
+    value,
+    components: shell(
+      ["heading", "count", "divider-1", ...rowIds, "candidateCaveat", "rationale"],
+      [
+        text("heading", "/heading", "h3"),
+        text("count", "/countText", "caption"),
+        divider("divider-1"),
+        ...rowIds.map((id, index) => text(id, `/deadline${index}Text`, "body")),
+        text("candidateCaveat", "/candidateCaveat", "caption"),
+        text("rationale", "/rationaleText", "caption"),
+      ],
+    ),
+  };
+}
+
+function personaSelectorBody(
+  card: Extract<CardSpec, { componentType: "PersonaSelector" }>,
+  data: unknown,
+  context: ExpandContext,
+): CardBody {
+  const response = asRecord(data);
+  const personas = (Array.isArray(response.personas) ? response.personas.filter(isRecord) : [])
+    .flatMap((persona) => {
+      const parsed = RecommendationPersonaSchema.safeParse(persona.id);
+      return parsed.success ? [{ persona, personaId: parsed.data }] : [];
+    })
+    .slice(0, MAX_PERSONA_ROWS);
+  const value: Record<string, unknown> = {
+    heading: "추천 관점 선택",
+    activePersonaId: context.activePersonaId ?? "",
+    personas: personas.map(({ persona }) => persona),
+    rationale: card.rationale,
+    rationaleText: `표시 이유: ${card.rationale}`,
+    caveat: "관점 전환은 추천 점수의 우선순위만 바꾸며, 실제 신청 자격을 결정하지 않습니다.",
+  };
+  const rowIds: string[] = [];
+  const components: Component[] = [];
+  personas.forEach(({ persona, personaId }, index) => {
+    const active = personaId === context.activePersonaId;
+    value[`persona${index}Label`] = `${personaLabel(personaId)}${active ? " · 현재 관점" : ""}`;
+    value[`persona${index}Text`] = personaText(persona);
+    rowIds.push(`persona-${index}`, `persona-${index}-desc`);
+    components.push(
+      button(
+        `persona-${index}`,
+        `persona-${index}-label`,
+        { name: "persona.select", context: { personaId } },
+        active ? "primary" : "default",
+      ),
+      text(`persona-${index}-label`, `/persona${index}Label`, "body"),
+      text(`persona-${index}-desc`, `/persona${index}Text`, "caption"),
+    );
+  });
+
+  return {
+    value,
+    components: shell(
+      ["heading", "caveat", "divider-1", ...rowIds, "divider-2", "rationale"],
+      [
+        text("heading", "/heading", "h3"),
+        text("caveat", "/caveat", "caption"),
+        divider("divider-1"),
+        ...components,
+        divider("divider-2"),
+        text("rationale", "/rationaleText", "caption"),
+      ],
+    ),
+  };
 }
 
 function sourceNoticeBody(
@@ -80,7 +444,7 @@ function sourceNoticeBody(
   const observedAt = stringValue(freshness.observedAt) ?? "";
   const dataStatus = asRecord(detailResponse.dataStatus);
   const sourceObservations = Array.isArray(dataStatus.sources)
-    ? dataStatus.sources.filter(isRecord).slice(0, MAX_DYNAMIC_TEXT_ITEMS)
+    ? dataStatus.sources.filter(isRecord).slice(0, MAX_DYNAMIC_ROWS)
     : [];
   const value: Record<string, unknown> = {
     heading: "출처와 최신성",
@@ -108,127 +472,34 @@ function sourceNoticeBody(
 
   return {
     value,
-    components: [
-      {
-        id: "root",
-        component: "Column",
-        children: [
-          "heading",
-          "benefitTitle",
-          "provider",
-          "source",
-          ...(applicationUrl ? ["application"] : []),
-          "sourceHealth",
-          "freshness",
-          "safetyNotice",
-          "rationale",
-        ],
-      },
-      { id: "heading", component: "Text", text: { path: "/heading" } },
-      { id: "benefitTitle", component: "Text", text: { path: "/benefitTitle" } },
-      { id: "provider", component: "Text", text: { path: "/provider" } },
-      { id: "source", component: "Text", text: { path: "/sourceText" } },
-      ...(applicationUrl
-        ? [{ id: "application", component: "Text", text: { path: "/applicationText" } }]
-        : []),
-      { id: "sourceHealth", component: "Text", text: { path: "/sourceHealthText" } },
-      { id: "freshness", component: "Text", text: { path: "/freshnessText" } },
-      { id: "safetyNotice", component: "Text", text: { path: "/safetyNotice" } },
-      { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
-    ],
-  };
-}
-
-function personaSelectorBody(
-  card: Extract<CardSpec, { componentType: "PersonaSelector" }>,
-  data: unknown,
-): CardBody {
-  const response = asRecord(data);
-  const personas = Array.isArray(response.personas)
-    ? response.personas.filter(isRecord).slice(0, MAX_DYNAMIC_TEXT_ITEMS)
-    : [];
-  const value: Record<string, unknown> = {
-    heading: "추천 관점 선택",
-    personas,
-    rationale: card.rationale,
-    rationaleText: `표시 이유: ${card.rationale}`,
-    caveat:
-      "관점 전환은 추천 점수의 우선순위만 바꾸며, 실제 신청 자격을 결정하지 않습니다.",
-  };
-  const personaIds = personas.map((persona, index) => {
-    value[`persona${index}Text`] = personaText(persona);
-    return `persona-${index}`;
-  });
-
-  return {
-    value,
-    components: [
-      {
-        id: "root",
-        component: "Column",
-        children: ["heading", ...personaIds, "caveat", "rationale"],
-      },
-      { id: "heading", component: "Text", text: { path: "/heading" } },
-      ...personaIds.map((id, index) => ({
-        id,
-        component: "Text",
-        text: { path: `/persona${index}Text` },
-      })),
-      { id: "caveat", component: "Text", text: { path: "/caveat" } },
-      { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
-    ],
-  };
-}
-
-function deadlineListBody(
-  card: Extract<CardSpec, { componentType: "DeadlineList" }>,
-  data: unknown,
-): CardBody {
-  const response = asRecord(data);
-  const allResults = Array.isArray(response.results) ? response.results.filter(isRecord) : [];
-  const responseWindow = typeof response.withinDays === "number" ? response.withinDays : undefined;
-  const requestedWindow = typeof card.props.withinDays === "number" ? card.props.withinDays : undefined;
-  const withinDays = requestedWindow ?? responseWindow;
-  const generatedAt = typeof response.generatedAt === "string" ? response.generatedAt : "";
-  const results = filterDeadlineResults(allResults, requestedWindow, generatedAt).slice(
-    0,
-    MAX_DYNAMIC_TEXT_ITEMS,
-  );
-  const value: Record<string, unknown> = {
-    heading: withinDays === undefined ? "다가오는 신청 마감" : `향후 ${withinDays}일 신청 마감`,
-    withinDays,
-    generatedAt,
-    results,
-    resultCount: results.length,
-    countText: `${results.length}개 후보`,
-    rationale: card.rationale,
-    rationaleText: `표시 이유: ${card.rationale}`,
-    candidateCaveat:
-      "마감 일정과 자격 요건은 변경될 수 있습니다. 신청 전 공식 공고에서 다시 확인하세요.",
-  };
-  const resultIds = results.map((result, index) => {
-    value[`deadline${index}Text`] = deadlineResultText(result);
-    return `deadline-${index}`;
-  });
-
-  return {
-    value,
-    components: [
-      {
-        id: "root",
-        component: "Column",
-        children: ["heading", "count", ...resultIds, "candidateCaveat", "rationale"],
-      },
-      { id: "heading", component: "Text", text: { path: "/heading" } },
-      { id: "count", component: "Text", text: { path: "/countText" } },
-      ...resultIds.map((id, index) => ({
-        id,
-        component: "Text",
-        text: { path: `/deadline${index}Text` },
-      })),
-      { id: "candidateCaveat", component: "Text", text: { path: "/candidateCaveat" } },
-      { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
-    ],
+    components: shell(
+      [
+        "heading",
+        "benefitTitle",
+        "provider",
+        "divider-1",
+        "source",
+        ...(applicationUrl ? ["application"] : []),
+        "sourceHealth",
+        "freshness",
+        "divider-2",
+        "safetyNotice",
+        "rationale",
+      ],
+      [
+        text("heading", "/heading", "h3"),
+        text("benefitTitle", "/benefitTitle", "h4"),
+        text("provider", "/provider", "caption"),
+        divider("divider-1"),
+        text("source", "/sourceText", "body"),
+        ...(applicationUrl ? [text("application", "/applicationText", "body")] : []),
+        text("sourceHealth", "/sourceHealthText", "caption"),
+        text("freshness", "/freshnessText", "caption"),
+        divider("divider-2"),
+        text("safetyNotice", "/safetyNotice", "caption"),
+        text("rationale", "/rationaleText", "caption"),
+      ],
+    ),
   };
 }
 
@@ -246,203 +517,6 @@ function filterDeadlineResults(
     const deadline = Date.parse(result.applicationDeadline);
     return Number.isFinite(deadline) && deadline >= start && deadline <= end;
   });
-}
-
-function checklistBody(
-  card: Extract<CardSpec, { componentType: "Checklist" }>,
-  data: unknown,
-): CardBody {
-  const checklist = asRecord(data);
-  const items = Array.isArray(checklist.items)
-    ? checklist.items.filter(isRecord).slice(0, MAX_DYNAMIC_TEXT_ITEMS)
-    : [];
-  const caveats = stringArray(checklist.caveats).slice(0, MAX_DYNAMIC_TEXT_ITEMS);
-  const compact = card.props.compact === true;
-  const requiredCount = items.filter((item) => item.required === true).length;
-  const value: Record<string, unknown> = {
-    heading: "신청 준비 체크리스트",
-    benefitId: String(checklist.benefitId ?? card.entityRef.entityId),
-    items,
-    requiredCount,
-    progressText: `필수 ${requiredCount}개 · 전체 ${items.length}개`,
-    caveats,
-    caveatText:
-      caveats.length > 0
-        ? `확인 사항: ${caveats.join(" · ")}`
-        : "체크리스트는 공식 공고와 대조해 확인하세요.",
-    rationale: card.rationale,
-    rationaleText: `표시 이유: ${card.rationale}`,
-  };
-  const itemIds = items.map((item, index) => {
-    value[`item${index}Text`] = checklistItemText(item, compact);
-    return `item-${index}`;
-  });
-
-  return {
-    value,
-    components: [
-      {
-        id: "root",
-        component: "Column",
-        children: ["heading", "progress", ...itemIds, "caveat", "rationale"],
-      },
-      { id: "heading", component: "Text", text: { path: "/heading" } },
-      { id: "progress", component: "Text", text: { path: "/progressText" } },
-      ...itemIds.map((id, index) => ({
-        id,
-        component: "Text",
-        text: { path: `/item${index}Text` },
-      })),
-      { id: "caveat", component: "Text", text: { path: "/caveatText" } },
-      { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
-    ],
-  };
-}
-
-function scoreBreakdownBody(
-  card: Extract<CardSpec, { componentType: "ScoreBreakdown" }>,
-  data: unknown,
-): CardBody {
-  const benefit = asRecord(data);
-  const ranking = asRecord(benefit.ranking);
-  const score = typeof ranking.score === "number" ? ranking.score : 0;
-  const rawItems = Array.isArray(ranking.breakdown)
-    ? ranking.breakdown.filter(isRecord)
-    : [];
-  const maxItems =
-    typeof card.props.maxItems === "number"
-      ? Math.min(MAX_DYNAMIC_TEXT_ITEMS, Math.max(1, Math.floor(card.props.maxItems)))
-      : MAX_DYNAMIC_TEXT_ITEMS;
-  const items = rawItems.slice(0, maxItems);
-
-  const value: Record<string, unknown> = {
-    heading: "상대 관련도 구성",
-    benefitTitle: String(benefit.title ?? ""),
-    score,
-    scoreLabel: relativeScoreLabel(score),
-    scoreText: relativeScoreLabel(score),
-    items,
-    rationale: card.rationale,
-    rationaleText: `표시 이유: ${card.rationale}`,
-  };
-  const itemIds = items.map((item, index) => {
-    const key = `item${index}Text`;
-    value[key] = scoreDimensionText(item);
-    return `item-${index}`;
-  });
-
-  return {
-    value,
-    components: [
-      {
-        id: "root",
-        component: "Column",
-        children: ["heading", "benefitTitle", "score", ...itemIds, "rationale"],
-      },
-      { id: "heading", component: "Text", text: { path: "/heading" } },
-      { id: "benefitTitle", component: "Text", text: { path: "/benefitTitle" } },
-      { id: "score", component: "Text", text: { path: "/scoreText" } },
-      ...itemIds.map((id, index) => ({
-        id,
-        component: "Text",
-        text: { path: `/item${index}Text` },
-      })),
-      { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
-    ],
-  };
-}
-
-function benefitCardBody(
-  card: Extract<CardSpec, { componentType: "BenefitCard" }>,
-  data: unknown,
-  cache: ToolResultCache,
-): CardBody {
-  const benefit = (data ?? {}) as Record<string, unknown>;
-  const detailResponse = asRecord(cache.get({
-    toolResult: "getBenefitDetail",
-    entityId: card.entityRef.entityId,
-  }));
-  const detail = asRecord(detailResponse.result);
-  const assessment = asRecord(benefit.assessment);
-  const ranking = asRecord(benefit.ranking);
-  const score = typeof ranking.score === "number" ? ranking.score : 0;
-  const showScore = card.props.showScore !== false;
-  const showReasons = card.props.showReasons !== false;
-  const reasons = Array.isArray(assessment.constraints)
-    ? assessment.constraints
-        .filter(isRecord)
-        .flatMap((constraint) => stringValue(constraint.explanation) ?? [])
-        .slice(0, MAX_DYNAMIC_TEXT_ITEMS)
-    : [];
-  const missingInfo = stringArray(assessment.missingInfo).slice(0, MAX_DYNAMIC_TEXT_ITEMS);
-  const scoreBreakdown = Array.isArray(ranking.breakdown)
-    ? ranking.breakdown.slice(0, MAX_DYNAMIC_TEXT_ITEMS)
-    : [];
-  const sourceLink = preferredOfficialLink(detail.links, "source");
-  const sourceUrl = sourceLink?.url;
-
-  const value: Record<string, unknown> = {
-    title: String(benefit.title ?? ""),
-    provider: String(benefit.provider ?? ""),
-    summary: String(benefit.summary ?? ""),
-    status: String(assessment.status ?? "candidate"),
-    statusLabel: recommendationStatusLabel(assessment.status),
-    scoreLabel: relativeScoreLabel(score),
-    reasons,
-    reasonsText: reasons.length > 0 ? `추천 근거: ${reasons.join(" · ")}` : "추천 근거: 제공되지 않음",
-    missingInfo,
-    missingInfoText:
-      missingInfo.length > 0
-        ? `확인 필요: ${missingInfo.join(" · ")}`
-        : "추가로 확인할 정보가 없습니다.",
-    scoreBreakdown,
-    scoreBreakdownText: scoreBreakdownLabel(scoreBreakdown),
-    rationale: card.rationale,
-    rationaleText: `구성 이유: ${card.rationale}`,
-    candidateCaveat:
-      "이 추천은 자격 판정이 아닌 후보 안내입니다. 출처 링크가 해당 기관 공식 주소인지 확인한 뒤 최신 요건을 확인하세요.",
-  };
-  if (sourceUrl) {
-    value.sourceUrl = sourceUrl;
-    value.sourceText = `공식 출처 · 상태 ${sourceLink?.health ?? "unknown"}: ${sourceUrl}`;
-  }
-
-  const childIds = [
-    "title",
-    "provider",
-    "status",
-    "summary",
-    ...(showScore ? ["score", "scoreBreakdown"] : []),
-    ...(showReasons ? ["reasons"] : []),
-    "missingInfo",
-    "rationale",
-    "candidateCaveat",
-    ...(sourceUrl ? ["source"] : []),
-  ];
-  const components: Array<Record<string, unknown>> = [
-    { id: "root", component: "Column", children: childIds },
-    { id: "title", component: "Text", text: { path: "/title" } },
-    { id: "provider", component: "Text", text: { path: "/provider" } },
-    { id: "status", component: "Text", text: { path: "/statusLabel" } },
-    { id: "summary", component: "Text", text: { path: "/summary" } },
-    { id: "reasons", component: "Text", text: { path: "/reasonsText" } },
-    { id: "missingInfo", component: "Text", text: { path: "/missingInfoText" } },
-    { id: "rationale", component: "Text", text: { path: "/rationaleText" } },
-    { id: "candidateCaveat", component: "Text", text: { path: "/candidateCaveat" } },
-  ];
-  if (showScore) {
-    components.push({ id: "score", component: "Text", text: { path: "/scoreLabel" } });
-    components.push({
-      id: "scoreBreakdown",
-      component: "Text",
-      text: { path: "/scoreBreakdownText" },
-    });
-  }
-  if (sourceUrl) {
-    components.push({ id: "source", component: "Text", text: { path: "/sourceText" } });
-  }
-
-  return { components, value };
 }
 
 function stringArray(value: unknown): string[] {
@@ -485,7 +559,7 @@ function checklistItemText(item: Record<string, unknown>, compact: boolean): str
   const label = typeof item.label === "string" ? item.label : "이름 없는 준비 항목";
   const required = item.required === true ? "필수" : "선택";
   const source = !compact && typeof item.source === "string" ? ` · 출처: ${item.source}` : "";
-  return `☐ [${required}] ${label}${source}`;
+  return `[${required}] ${label}${source}`;
 }
 
 function deadlineResultText(result: Record<string, unknown>): string {
