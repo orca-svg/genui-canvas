@@ -795,4 +795,91 @@ describe("App — interactive catalog", () => {
     await user.click(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" }));
     expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
   });
+
+  it("ignores a checklist tick while a turn is in flight and restores the box", async () => {
+    // fetch mock whose /api/turn never resolves until we release it
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const eventBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          eventBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          if (turns === 2) await gate;
+          return new Response(interactiveCompositionSse({ nextSeq: 3 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const box = (await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement;
+    // start a second turn that stays pending, then tick while busy
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await user.click(box);
+    expect(eventBodies.some((e) => e.type === "checklist.check")).toBe(false);
+    await waitFor(() =>
+      expect((screen.getByRole("checkbox", { name: "재학증명서" }) as HTMLInputElement).checked).toBe(
+        false,
+      ),
+    );
+    release();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+  });
+
+  it("hides a currently visible card when the next composition ships it in the hidden tail", async () => {
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          // first turn: entity "z" visible; second turn: same entity in the hidden tail
+          const body =
+            turns === 1
+              ? compositionSseFor([{ entityId: "z", title: "숨긴 혜택 본문" }])
+              : interactiveCompositionSse({ hiddenEntityId: "z" });
+          return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    const canvas = within(screen.getByRole("region", { name: "추천 결과" }));
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await waitFor(() => expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" })).toBeInTheDocument();
+  });
 });

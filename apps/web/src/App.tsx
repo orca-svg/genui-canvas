@@ -174,6 +174,12 @@ export function App() {
   // Manipulations applied since the last composition — the trace the next
   // composition point will fold in.
   const [dirty, setDirty] = useState(false);
+  // Bumped whenever a checklist edit is ignored (busy/no session): the
+  // renderer already wrote the toggled value into its data model before we
+  // could reject it, and nothing else re-renders `App` to correct it — this
+  // forces the `values` memo to produce a fresh array so the renderer's
+  // values-push effect re-syncs the checkbox to the shell's actual state.
+  const [ignoredEditRevision, setIgnoredEditRevision] = useState(0);
   const scenarioRef = useRef<Scenario>(SCENARIOS[0]!);
   const seqRef = useRef(0);
   const traceQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -205,6 +211,11 @@ export function App() {
       })),
     [checklistCards],
   );
+  // `busy` and `ignoredEditRevision` are included so a fresh array is
+  // produced (even when the checked set itself hasn't changed) whenever a
+  // turn starts/ends or a checklist edit is ignored — that identity change
+  // re-runs the renderer's values-push effect, which is what makes a tick
+  // ignored by `handleCanvasValue` while busy visibly revert.
   const values = useMemo(
     () =>
       checklistCards.flatMap((c) =>
@@ -214,7 +225,7 @@ export function App() {
           value: c.checkedItems.includes(i),
         })),
       ),
-    [checklistCards],
+    [checklistCards, busy, ignoredEditRevision],
   );
 
   useEffect(() => {
@@ -383,6 +394,13 @@ export function App() {
 
   // A CheckBox edit reaches the shell here; ignore echoes of shell-driven writes.
   function handleCanvasValue(change: CanvasValueChange) {
+    if (busy || !sessionId) {
+      // The renderer already wrote the toggled value into its data model;
+      // force a fresh `values` array so its push effect writes the shell's
+      // real (unchanged) value back and the checkbox visibly reverts.
+      setIgnoredEditRevision((revision) => revision + 1);
+      return;
+    }
     const match = /^\/checked(\d{1,2})$/.exec(change.path);
     if (!match || typeof change.value !== "boolean") return;
     const itemIndex = Number(match[1]);
