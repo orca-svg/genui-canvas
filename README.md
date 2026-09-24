@@ -47,7 +47,8 @@ immediate control over the resulting canvas.
 - Checklist ticks are a local preparation memo. They are applied instantly,
   recorded as `checklist.check` / `checklist.uncheck` events carrying only the
   row index, and re-applied on the next composition from the server-derived
-  trace. They are never an application state.
+  trace, also when a `Checklist` returns after dropping out of a composition.
+  They are never an application state.
 - A hidden candidate stays in the shell as a hidden row after recomposition,
   so "다시 보기" works without a round-trip. Compositions themselves are not
   undoable; the undo history restarts at each composition point and the
@@ -167,9 +168,11 @@ session.start → query.submit → tool.called → composition.applied
 It fails unless the pinned card moves first, the hidden card leaves the
 visible order, the order changes, the trace closes the loop, and the second
 composition contains `Checklist` and `SourceNotice` for the expanded
-candidate and `ScoreBreakdown` for the pinned one (`subCardsComposed`). To
-investigate a locally configured model separately (not a CI/reproduction
-gate):
+candidate and `ScoreBreakdown` for the pinned one (`subCardsComposed`), laid
+out by candidate group: each candidate's cards stay together in the fixed
+`BenefitCard → ScoreBreakdown → Checklist → SourceNotice` order, pinned groups
+come first and `DeadlineList` last (`groupedOrderPreserved`). To investigate a
+locally configured model separately (not a CI/reproduction gate):
 
 ```bash
 pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
@@ -179,8 +182,11 @@ pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
 
 - Session IDs are server-issued UUIDs; path traversal, unknown sessions,
   sequence gaps, and different duplicate events are rejected.
-- Exact retry of an already accepted immutable event is idempotent, supporting
-  response-loss recovery without duplicate trace rows.
+- An exact retry of the client's most recent accepted event is idempotent,
+  supporting response-loss recovery without duplicate trace rows. If a turn's
+  response is lost after the server recorded `tool.called`, the client's next
+  event gets a sequence-conflict reply carrying the server's `nextSeq`; the
+  client rebuilds that event with it and retries once.
 - The server records `session.start` and one `tool.called` ledger per turn
   (tool name, call and failure counts only) in the same trace, and returns
   `nextSeq` so the client cannot skip or reuse a sequence number.

@@ -41,11 +41,11 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | Renderer | Escaped A2UI text renders; empty/late surfaces work; shell order and hidden filtering work; preview/expanded wrappers and IDs remain stable; tests finish without React `act` warnings. |
 | Interactive catalog | Wire schema accepts only `Card`/`Column`/`Row`/`Divider`/`Text`, `Button` with a named canvas action, and `CheckBox` bound to a path; renderer relays Button actions and CheckBox edits to the shell and writes shell-owned values back; the shell re-validates every action before mapping it to `persona.switch`. |
 | Shell UX | Custom query and persona are composition points; pin/hide/preview/reorder are immediate; pinned-first invariant holds; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
-| Trace/API | Server-issued UUID session, no path traversal, seq starts at zero, gap/different duplicate rejected, exact retry idempotent, unknown sessions rejected, request objects strict, error details hidden, CORS allowlisted. |
+| Trace/API | Server-issued UUID session, no path traversal, seq starts at zero, gap/different duplicate rejected, exact retry of the client's most recent event idempotent, sequence conflicts return the server's `nextSeq` for one client re-sync retry, unknown sessions rejected, request objects strict, error details hidden, CORS allowlisted. |
 | Trace bookkeeping | `session.start` at seq 0, one `tool.called` per turn, `nextSeq` on terminal events, client events continue the server sequence, bookkeeping rows excluded from the provider's recent history. |
 | Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
-| Model boundary | Prompt contains no raw query, title, summary, URL, or profile string; only safe semantic projection; strict structured output and hallucinated references are rejected. |
-| Manipulation invariants | Hidden cards never enter the visible order but ship in a hidden tail the shell can unhide; pinned cards cannot be dropped/buried; explicit reorder survives; expanded → Checklist+SourceNotice, pinned → ScoreBreakdown, ticked rows keep Checklist; deterministic expansion preserves trusted tool data. |
+| Model boundary | Prompt contains no raw query, title, summary, URL, or profile string; only safe semantic projection; strict structured output and hallucinated references are rejected; the streamed intent sentence passes the same markup/URL and definitive-eligibility rule as card rationales or is omitted. |
+| Manipulation invariants | Hidden cards never enter the visible order but ship in a hidden tail the shell can unhide; pinned cards cannot be dropped/buried; explicit reorder survives; the visible order is grouped by candidate (`PersonaSelector` first, pinned groups next, fixed `BenefitCard → ScoreBreakdown → Checklist → SourceNotice` inside a group, `DeadlineList` last); expanded → Checklist+SourceNotice, pinned → ScoreBreakdown, ticked rows keep Checklist; deterministic expansion preserves trusted tool data. |
 | Trust copy | Scores say “relative relevance, not eligibility probability”; `conflict_detected` remains a candidate-level verification warning; source health/freshness and non-adjudication caveats remain visible; no definitive eligibility wording. |
 | CI replay | Actual session→event→turn routes persist the full eleven-event sequence (including `session.start` and `tool.called` bookkeeping rows) and the second provider request observes server-derived pin/hide/reorder/expand signals. |
 
@@ -64,8 +64,9 @@ The central claim is tested at three levels.
 
 - provider tests prove score-default ordering and user-reorder preservation;
 - validation rejects unknown component/tool/entity/order/prop fields;
-- server enforcement restores pins, removes hidden semantic cards, and applies
-  current semantic order even for a non-compliant provider;
+- server enforcement restores pins, moves hidden semantic cards to the hidden
+  tail, and rebuilds the visible order by candidate group (pinned groups, then
+  the user's order) even for a non-compliant provider;
 - hostile gateway display text cannot alter the model prompt projection.
 
 ### 3. HTTP persisted replay
@@ -82,6 +83,7 @@ The replay must report all of the following as `true`:
 - `hiddenRemoved`
 - `orderChanged`
 - `subCardsComposed`
+- `groupedOrderPreserved`
 
 It must persist these types in this order:
 
@@ -162,11 +164,14 @@ do not infer this gate from unit tests alone.
 - Gateway/provider failures expose stable user-facing messages, not internal
   errors, upstream bodies, API keys, or paths.
 - Because server-originated rows (`session.start`, `tool.called`) share the
-  session sequence, "exact retry is idempotent" now holds for the client's
-  most recent event only; the web client awaits the triggering event's
+  session sequence, "exact retry is idempotent" holds for the client's most
+  recent event only. The web client awaits the triggering event's
   acknowledgement before starting a turn and disables every manipulation
-  control while a turn is busy, so no client event can be left unacknowledged
-  when a server row lands.
+  control while a turn is busy. If the turn's response is still lost (timeout
+  or dropped stream) after the server recorded `tool.called`, the client's
+  next event receives a sequence-conflict reply carrying `nextSeq`; the client
+  re-synchronises from it and retries that event once. An identity conflict
+  carries no `nextSeq` and is never retried.
 
 ## Current claim limits
 

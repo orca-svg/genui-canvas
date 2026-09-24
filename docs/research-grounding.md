@@ -62,11 +62,15 @@ silently treated as the general AAAI technical track.
 
 1. Direct manipulations update the shell immediately and do not call the model.
 2. A server-issued UUID session and monotonic event sequence back every trace;
-   exact event retries are idempotent and different duplicate/gap events fail.
+   an exact retry of the client's most recent event is idempotent, different
+   duplicate/gap events fail, and a sequence-conflict reply carries the
+   server's `nextSeq`, so a client that lost a turn's response re-synchronises
+   and retries once.
 3. `pnpm demo:replay` passes through Hono HTTP session/event/turn endpoints,
    persists eleven events (including the `session.start` and `tool.called`
    bookkeeping rows), verifies the second provider request received the
-   server-derived trace, and checks pin/hide/reorder effects.
+   server-derived trace, and checks pin/hide/reorder effects and the
+   candidate-grouped visible order.
 4. Gateway tool outputs are parsed with the shared published v2 Zod contracts;
    MCP `structuredContent` must equal the JSON TextContent fallback exactly,
    and unsupported schema versions produce a visible compatibility fallback.
