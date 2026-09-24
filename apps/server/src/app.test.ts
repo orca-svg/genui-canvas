@@ -650,4 +650,49 @@ describe("server-side trace bookkeeping", () => {
     expect(error?.message).not.toContain(secret);
     expect(traceStore.read(sessionId).map((e) => e.type)).toEqual(["session.start", "tool.called"]);
   });
+
+  it("answers a client that missed a turn's nextSeq with the sequence to use next", async () => {
+    const sessionId = await issueSession();
+    expect((await postInteractionEvent(sessionId, 1)).status).toBe(200);
+    // The turn records tool.called at seq 2; this client never reads the stream.
+    await (
+      await app.request("/api/turn", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          trigger: { type: "query.submit", text: "서울 대학생 지원" },
+          profile: {},
+          currentComposition: { cards: [] },
+        }),
+      })
+    ).text();
+
+    const stale = await postInteractionEvent(sessionId, 2);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ ok: false, error: "Event sequence conflict", nextSeq: 3 });
+    expect((await postInteractionEvent(sessionId, 3)).status).toBe(200);
+    expect(traceStore.read(sessionId).map((e) => e.seq)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("offers no sequence for an event identity conflict", async () => {
+    const sessionId = await issueSession();
+    const event = createInteractionEvent({
+      sessionId,
+      seq: 1,
+      actor: "user",
+      type: "card.pin",
+      context: { compositionId: "comp1", visibleCardIds: [] },
+    });
+    const send = (body: unknown) =>
+      app.request("/api/events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    expect((await send(event)).status).toBe(200);
+    const conflict = await send({ ...event, seq: 2, type: "card.unpin" });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ ok: false, error: "Event identity conflict" });
+  });
 });

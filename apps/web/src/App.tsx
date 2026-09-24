@@ -22,7 +22,14 @@ import {
   type CompositionCard,
   type InteractionEvent,
 } from "@genui-canvas/contracts";
-import { createSession, postEvent, postTurn, type SessionHandle, type TurnBody } from "./api/client.js";
+import {
+  SequenceConflictError,
+  createSession,
+  postEvent,
+  postTurn,
+  type SessionHandle,
+  type TurnBody,
+} from "./api/client.js";
 import { CardFrame } from "./components/CardFrame.js";
 
 interface Scenario {
@@ -256,8 +263,17 @@ export function App() {
     build: (seq: number) => Parameters<typeof postEvent>[0],
   ): Promise<InteractionEvent> {
     const task = traceQueueRef.current.then(async () => {
-      const event = build(seqRef.current);
-      await postEvent(event);
+      let event = build(seqRef.current);
+      try {
+        await postEvent(event);
+      } catch (error) {
+        if (!(error instanceof SequenceConflictError)) throw error;
+        // A server row took this number (e.g. tool.called for a turn whose
+        // response was lost). Adopt the server's sequence and resend once.
+        seqRef.current = error.nextSeq;
+        event = build(seqRef.current);
+        await postEvent(event);
+      }
       seqRef.current += 1;
       return event;
     });

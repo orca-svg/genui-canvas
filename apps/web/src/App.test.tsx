@@ -960,4 +960,60 @@ describe("App — interactive catalog", () => {
     await user.click(box());
     await waitFor(() => expect(ticks().at(-1)).toMatchObject({ type: "checklist.uncheck", payload: { itemIndex: 0 } }));
   });
+
+  it("re-synchronises its sequence from a conflict reply after a lost turn response", async () => {
+    const eventBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    let rejectedPosts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          eventBodies.push(body);
+          // The server recorded tool.called for the lost turn, so the client's
+          // next number is stale; the conflict reply says which one to use.
+          if (body.type === "composition.rejected" && ++rejectedPosts === 1) {
+            return new Response(
+              JSON.stringify({ ok: false, error: "Event sequence conflict", nextSeq: 5 }),
+              { status: 409, headers: { "content-type": "application/json" } },
+            );
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          if (turns === 2) return new Response("lost", { status: 500 });
+          return new Response(interactiveCompositionSse({ nextSeq: 2 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(eventBodies.some((e) => e.type === "composition.applied")).toBe(true));
+
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await waitFor(() =>
+      expect(eventBodies.filter((e) => e.type === "composition.rejected")).toHaveLength(2),
+    );
+    const rejected = eventBodies.filter((e) => e.type === "composition.rejected");
+    expect(rejected.map((e) => e.seq)).toEqual([4, 5]);
+    expect(rejected[1]).toMatchObject({ payload: { reason: "turn_failed" } });
+    expect(screen.getByRole("status")).toHaveTextContent("추천을 갱신하지 못했습니다");
+
+    await user.click(await screen.findByRole("button", { name: "혜택 A 고정" }));
+    await waitFor(() => expect(eventBodies.at(-1)).toMatchObject({ type: "card.pin", seq: 6 }));
+  });
 });

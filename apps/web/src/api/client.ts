@@ -54,6 +54,38 @@ export async function createSession(): Promise<SessionHandle> {
   return { sessionId: SessionIdSchema.parse(body.sessionId), nextSeq };
 }
 
+/**
+ * The server holds a different next sequence than the event carried — e.g. it
+ * recorded `tool.called` for a turn whose response never reached the client.
+ * `nextSeq` is the number the server expects; the caller rebuilds and resends.
+ */
+export class SequenceConflictError extends Error {
+  constructor(readonly nextSeq: number) {
+    super(`record event failed with HTTP 409: sequence conflict, server expects ${nextSeq}`);
+    this.name = "SequenceConflictError";
+  }
+}
+
+async function sequenceConflictNextSeq(res: Response): Promise<number | undefined> {
+  try {
+    const body = (await res.json()) as { error?: unknown; nextSeq?: unknown };
+    return body.error === "Event sequence conflict" &&
+      typeof body.nextSeq === "number" &&
+      Number.isInteger(body.nextSeq) &&
+      body.nextSeq >= 0
+      ? body.nextSeq
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Record one trace event, retrying the identical body once after a network or
+ * 5xx failure. A sequence conflict is not retried here: it throws
+ * `SequenceConflictError` so the caller can rebuild the event with the
+ * server's sequence.
+ */
 export async function postEvent(event: InteractionEvent): Promise<void> {
   const body = JSON.stringify(event);
 
@@ -71,6 +103,10 @@ export async function postEvent(event: InteractionEvent): Promise<void> {
       continue;
     }
     if (res.ok) return;
+    if (res.status === 409) {
+      const nextSeq = await sequenceConflictNextSeq(res);
+      if (nextSeq !== undefined) throw new SequenceConflictError(nextSeq);
+    }
     if (res.status < 500 || attempt === 1) assertOk(res, "record event");
   }
 }

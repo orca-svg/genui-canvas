@@ -132,7 +132,9 @@ export function createApp(deps: AppDeps) {
       return c.json({ ok: false, error: "Event identity conflict" }, 409);
     }
     if (parsed.data.seq !== session.seq) {
-      return c.json({ ok: false, error: "Event sequence conflict" }, 409);
+      // Server rows (tool.called) share this sequence; a client that lost a
+      // turn's nextSeq re-synchronises from this reply instead of jamming.
+      return c.json({ ok: false, error: "Event sequence conflict", nextSeq: session.seq }, 409);
     }
     deps.traceStore.append(parsed.data);
     session.seq += 1;
