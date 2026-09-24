@@ -23,3 +23,7 @@ AGENTS.md
 
 # Local status / handoff notes (personal, not part of the repo)
 /PROJECT_STATUS.md
+
+# Planning workspace (decision docs, never commit)
+/docs/superpowers/
+/.superpowers/
