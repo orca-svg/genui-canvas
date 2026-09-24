@@ -89,7 +89,7 @@ describe("POST /api/events", () => {
     const sessionId = await issueSession();
     const event = createInteractionEvent({
       sessionId,
-      seq: 0,
+      seq: 1,
       actor: "user",
       type: "card.pin",
       target: { cardId: "c1" },
@@ -101,30 +101,20 @@ describe("POST /api/events", () => {
       body: JSON.stringify(event),
     });
     expect(res.status).toBe(200);
-    expect(traceStore.read(sessionId)).toHaveLength(1);
+    // session.start (seq 0) plus this client event.
+    expect(traceStore.read(sessionId)).toHaveLength(2);
   });
 
-  it("rejects a first event whose sequence does not start at zero", async () => {
+  it("rejects a first client event that does not continue the server-issued sequence", async () => {
     const sessionId = await issueSession();
-    const event = createInteractionEvent({
-      sessionId,
-      seq: 1,
-      actor: "user",
-      type: "card.pin",
-      context: { compositionId: "comp1", visibleCardIds: [] },
-    });
-    const res = await app.request("/api/events", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(event),
-    });
-    expect(res.status).toBe(409);
+    expect((await postInteractionEvent(sessionId, 1)).status).toBe(200);
+    expect((await postInteractionEvent(sessionId, 0)).status).toBe(409);
   });
 
   it("accepts the next monotonically increasing sequence", async () => {
     const sessionId = await issueSession();
     const responses = [];
-    for (const seq of [0, 1]) {
+    for (const seq of [1, 2]) {
       const event = createInteractionEvent({
         sessionId,
         seq,
@@ -144,8 +134,8 @@ describe("POST /api/events", () => {
   });
 
   it.each([
-    ["duplicate", [0, 0]],
-    ["out-of-order", [0, 2]],
+    ["duplicate", [1, 1]],
+    ["out-of-order", [1, 3]],
   ])("rejects a %s sequence", async (_case, sequences) => {
     const sessionId = await issueSession();
     const statuses = [];
@@ -153,14 +143,15 @@ describe("POST /api/events", () => {
       statuses.push((await postInteractionEvent(sessionId, seq)).status);
     }
     expect(statuses).toEqual([200, 409]);
-    expect(traceStore.read(sessionId).map((stored) => stored.seq)).toEqual([0]);
+    // seq 0 is the server-recorded session.start; seq 1 is the accepted client event.
+    expect(traceStore.read(sessionId).map((stored) => stored.seq)).toEqual([0, 1]);
   });
 
   it("accepts an exact event retry idempotently without appending it twice", async () => {
     const sessionId = await issueSession();
     const event = createInteractionEvent({
       sessionId,
-      seq: 0,
+      seq: 1,
       actor: "user",
       type: "card.pin",
       context: { compositionId: "comp1", visibleCardIds: [] },
@@ -173,14 +164,19 @@ describe("POST /api/events", () => {
       });
 
     expect([(await send()).status, (await send()).status]).toEqual([200, 200]);
-    expect(traceStore.read(sessionId).map((stored) => stored.eventId)).toEqual([event.eventId]);
+    expect(
+      traceStore
+        .read(sessionId)
+        .filter((stored) => stored.type !== "session.start")
+        .map((stored) => stored.eventId),
+    ).toEqual([event.eventId]);
   });
 
   it("rejects a retry that reuses the event id with changed content", async () => {
     const sessionId = await issueSession();
     const event = createInteractionEvent({
       sessionId,
-      seq: 0,
+      seq: 1,
       actor: "user",
       type: "card.pin",
       target: { cardId: "c1", entityId: "benefit-1", componentType: "BenefitCard" },
@@ -202,14 +198,16 @@ describe("POST /api/events", () => {
         })
       ).status,
     ).toBe(409);
-    expect(traceStore.read(sessionId)).toEqual([event]);
+    expect(traceStore.read(sessionId).filter((stored) => stored.type !== "session.start")).toEqual([
+      event,
+    ]);
   });
 
   it("rejects reusing an accepted event id at a later sequence", async () => {
     const sessionId = await issueSession();
     const first = createInteractionEvent({
       sessionId,
-      seq: 0,
+      seq: 1,
       actor: "user",
       type: "card.pin",
       context: { compositionId: "comp1", visibleCardIds: [] },
@@ -221,7 +219,7 @@ describe("POST /api/events", () => {
         body: JSON.stringify(body),
       });
     expect((await send(first)).status).toBe(200);
-    expect((await send({ ...first, seq: 1, type: "card.unpin" })).status).toBe(409);
+    expect((await send({ ...first, seq: 2, type: "card.unpin" })).status).toBe(409);
   });
 
   it("rejects a malformed event with 400", async () => {
@@ -537,5 +535,76 @@ describe("POST /api/turn", () => {
     const text = await res.text();
     expect(text).not.toContain(secret);
     expect(text).toContain("구성을 검증하지 못했습니다");
+  });
+});
+
+function sseFrames(text: string): Array<Record<string, unknown>> {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n\n")
+    .map((block) => block.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim())
+    .filter((data): data is string => Boolean(data))
+    .map((data) => JSON.parse(data) as Record<string, unknown>);
+}
+
+describe("server-side trace bookkeeping", () => {
+  it("records session.start at seq 0 and tells the client the next sequence", async () => {
+    const res = await app.request("/api/session", { method: "POST" });
+    const body = (await res.json()) as { sessionId: string; nextSeq: number };
+    expect(body.nextSeq).toBe(1);
+    expect(traceStore.read(body.sessionId).map((e) => e.type)).toEqual(["session.start"]);
+    expect((await postInteractionEvent(body.sessionId, 0)).status).toBe(409);
+    expect((await postInteractionEvent(body.sessionId, 1)).status).toBe(200);
+  });
+
+  it("appends one tool.called summary per turn and returns nextSeq with the intent and composition", async () => {
+    const res = await app.request("/api/session", { method: "POST" });
+    const { sessionId } = (await res.json()) as { sessionId: string };
+    const turn = await app.request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        trigger: { type: "query.submit", text: "서울 대학생 지원" },
+        profile: {},
+        currentComposition: { cards: [] },
+      }),
+    });
+    const frames = sseFrames(await turn.text());
+    const intent = frames.find((f) => f.kind === "intent") as { text: string } | undefined;
+    const composition = frames.find((f) => f.kind === "composition") as { nextSeq: number; cards: Array<{ emphasis?: string }> } | undefined;
+    expect(intent?.text).toContain("후보");
+    expect(composition?.nextSeq).toBe(2);
+    expect(composition?.cards[0]?.emphasis).toBe("primary");
+    const recorded = traceStore.read(sessionId);
+    expect(recorded.map((e) => e.type)).toEqual(["session.start", "tool.called"]);
+    expect(recorded[1]?.actor).toBe("system");
+    expect((recorded[1]?.payload as { tools: Array<{ name: string }> }).tools.map((t) => t.name)).toContain("searchBenefits");
+    expect((await postInteractionEvent(sessionId, 2)).status).toBe(200);
+  });
+
+  it("returns nextSeq on a rejected composition without recording tool.called for a thrown gateway error", async () => {
+    const throwingGateway = {
+      async searchBenefits() {
+        throw new Error("boom");
+      },
+    } as unknown as GatewayClient;
+    const local = createApp({ gateway: throwingGateway, provider: new RuleBasedProvider(), traceStore });
+    const res = await local.request("/api/session", { method: "POST" });
+    const { sessionId } = (await res.json()) as { sessionId: string };
+    const turn = await local.request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        trigger: { type: "query.submit", text: "x" },
+        profile: {},
+        currentComposition: { cards: [] },
+      }),
+    });
+    const error = sseFrames(await turn.text()).find((f) => f.kind === "error") as { nextSeq: number; message: string };
+    expect(error.nextSeq).toBe(1);
+    expect(error.message).not.toContain("boom");
+    expect(traceStore.read(sessionId).map((e) => e.type)).toEqual(["session.start"]);
   });
 });
