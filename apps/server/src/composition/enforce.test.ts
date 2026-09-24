@@ -263,3 +263,227 @@ describe("hidden tail", () => {
     expect(result.spec.order).toEqual(["card-a", "card-b"]);
   });
 });
+
+// --- candidate groups (spec rules 6/7, rulings R10/R11) ----------------------
+
+const benefit = (id: string) => ({
+  cardId: `card-${id}`,
+  componentType: "BenefitCard" as const,
+  entityRef: { toolResult: "searchBenefits" as const, entityId: id },
+  props: {},
+  rationale: "r",
+});
+const score = (id: string) => ({
+  cardId: `score-${id}`,
+  componentType: "ScoreBreakdown" as const,
+  entityRef: { toolResult: "searchBenefits" as const, entityId: id },
+  props: {},
+  rationale: "r",
+});
+const checklist = (id: string) => ({
+  cardId: `checklist-${id}`,
+  componentType: "Checklist" as const,
+  entityRef: { toolResult: "buildChecklist" as const, entityId: id },
+  props: {},
+  rationale: "r",
+});
+const source = (id: string) => ({
+  cardId: `source-${id}`,
+  componentType: "SourceNotice" as const,
+  entityRef: { toolResult: "getBenefitDetail" as const, entityId: id },
+  props: {},
+  rationale: "r",
+});
+const deadlines = {
+  cardId: "deadlines",
+  componentType: "DeadlineList" as const,
+  entityRef: { toolResult: "getUpcomingDeadlines" as const, entityId: "upcoming-deadlines" as const },
+  props: {},
+  rationale: "r",
+};
+const personas = {
+  cardId: "personas",
+  componentType: "PersonaSelector" as const,
+  entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+  props: {},
+  rationale: "r",
+};
+type AnyCard =
+  | ReturnType<typeof benefit>
+  | ReturnType<typeof score>
+  | ReturnType<typeof checklist>
+  | ReturnType<typeof source>
+  | typeof deadlines
+  | typeof personas;
+const composedOf = (...cards: AnyCard[]) => ({
+  intentSummary: "x",
+  cards,
+  order: cards.map((card) => card.cardId),
+});
+const shellRow = (
+  cardId: string,
+  componentType: AnyCard["componentType"],
+  entityId: string,
+  flags: Partial<{ pinned: boolean; hidden: boolean; expanded: boolean }> = {},
+) => ({ cardId, entityId, componentType, pinned: false, hidden: false, expanded: false, ...flags });
+
+const groupCache = () => {
+  const c = new ToolResultCache();
+  c.putSearchResults([summary("p"), summary("r"), summary("x")]);
+  for (const id of ["p", "r", "x"]) {
+    c.put("buildChecklist", id, { benefitId: id, items: [], caveats: [] });
+    c.put("getBenefitDetail", id, { result: { id } });
+  }
+  c.put("getUpcomingDeadlines", "upcoming-deadlines", { results: [{ id: "p" }] });
+  c.put("listPersonas", "personas", { personas: [] });
+  return c;
+};
+
+describe("candidate groups", () => {
+  it("keeps pinned, expanded, and reordered groups whole with DeadlineList last", () => {
+    const spec = composedOf(
+      benefit("p"),
+      score("p"),
+      benefit("r"),
+      checklist("r"),
+      source("r"),
+      benefit("x"),
+      deadlines,
+    );
+    const current = {
+      cards: [
+        shellRow("card-p", "BenefitCard", "p", { pinned: true }),
+        shellRow("card-r", "BenefitCard", "r", { expanded: true }),
+        shellRow("card-x", "BenefitCard", "x"),
+        shellRow("deadlines", "DeadlineList", "upcoming-deadlines"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache(), true);
+
+    const expected = ["card-p", "score-p", "card-r", "checklist-r", "source-r", "card-x", "deadlines"];
+    expect(out.spec.order).toEqual(expected);
+    expect(out.spec.cards.map((card) => card.cardId)).toEqual(expected);
+    expect(out.hiddenCardIds).toEqual([]);
+    expect(CompositionSpecSchema.safeParse(out.spec).success).toBe(true);
+  });
+
+  it("puts PersonaSelector first and the pinned group right after it on a persona switch", () => {
+    const spec = composedOf(personas, benefit("p"), score("p"), benefit("x"), deadlines);
+    const current = {
+      cards: [
+        shellRow("card-p", "BenefitCard", "p", { pinned: true }),
+        shellRow("card-x", "BenefitCard", "x"),
+        shellRow("deadlines", "DeadlineList", "upcoming-deadlines"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    const expected = ["personas", "card-p", "score-p", "card-x", "deadlines"];
+    expect(out.spec.order).toEqual(expected);
+    expect(out.spec.cards.map((card) => card.cardId)).toEqual(expected);
+  });
+
+  it("pins the whole candidate group when only its sub-card is pinned", () => {
+    const spec = composedOf(benefit("x"), benefit("p"), score("p"), deadlines);
+    const current = {
+      cards: [
+        shellRow("score-p", "ScoreBreakdown", "p", { pinned: true }),
+        shellRow("card-x", "BenefitCard", "x"),
+        shellRow("card-p", "BenefitCard", "p"),
+        shellRow("deadlines", "DeadlineList", "upcoming-deadlines"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    expect(out.spec.order).toEqual(["card-p", "score-p", "card-x", "deadlines"]);
+  });
+
+  it("regroups a non-compliant provider's scattered sub-cards in the fixed in-group order", () => {
+    const spec = composedOf(
+      deadlines,
+      source("r"),
+      benefit("x"),
+      checklist("r"),
+      score("p"),
+      benefit("r"),
+      benefit("p"),
+    );
+    const current = {
+      cards: [
+        shellRow("card-p", "BenefitCard", "p", { pinned: true }),
+        shellRow("card-r", "BenefitCard", "r", { expanded: true }),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    // pinned p first; remaining groups by the provider position of their first card (r before x)
+    expect(out.spec.order).toEqual([
+      "card-p",
+      "score-p",
+      "card-r",
+      "checklist-r",
+      "source-r",
+      "card-x",
+      "deadlines",
+    ]);
+  });
+
+  it("keeps sub-cards without a visible BenefitCard after the groups in provider order", () => {
+    const spec = composedOf(source("r"), benefit("x"), checklist("r"), deadlines);
+    const current = { cards: [shellRow("card-x", "BenefitCard", "x", { expanded: true })] };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache(), true);
+
+    expect(out.spec.order).toEqual(["card-x", "source-r", "checklist-r", "deadlines"]);
+  });
+
+  it("orders unpinned groups by the user's BenefitCard rows, then new candidates by provider order", () => {
+    const spec = composedOf(benefit("p"), benefit("x"), checklist("x"), benefit("r"), deadlines);
+    const current = {
+      cards: [
+        shellRow("card-r", "BenefitCard", "r"),
+        shellRow("card-x", "BenefitCard", "x", { expanded: true }),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache(), true);
+
+    expect(out.spec.order).toEqual(["card-r", "card-x", "checklist-x", "card-p", "deadlines"]);
+  });
+
+  it("never resurrects a pinned sub-card of a candidate whose BenefitCard is hidden", () => {
+    const spec = composedOf(benefit("x"), deadlines);
+    const current = {
+      cards: [
+        shellRow("score-p", "ScoreBreakdown", "p", { pinned: true }),
+        shellRow("card-p", "BenefitCard", "p", { hidden: true }),
+        shellRow("card-x", "BenefitCard", "x"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    expect(out.spec.order).toEqual(["card-x", "deadlines", "card-p"]);
+    expect(out.hiddenCardIds).toEqual(["card-p"]);
+  });
+
+  it("appends the hidden tail after DeadlineList", () => {
+    const spec = composedOf(benefit("p"), score("p"), benefit("x"), deadlines);
+    const current = {
+      cards: [
+        shellRow("card-p", "BenefitCard", "p", { pinned: true }),
+        shellRow("card-x", "BenefitCard", "x"),
+        shellRow("card-r", "BenefitCard", "r", { hidden: true }),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    expect(out.spec.order).toEqual(["card-p", "score-p", "card-x", "deadlines", "card-r"]);
+    expect(out.hiddenCardIds).toEqual(["card-r"]);
+  });
+});

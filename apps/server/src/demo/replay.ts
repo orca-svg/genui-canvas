@@ -34,7 +34,8 @@ try {
     report.pinnedMovedToTop &&
     report.hiddenRemoved &&
     report.orderChanged &&
-    report.subCardsComposed;
+    report.subCardsComposed &&
+    report.groupedOrderPreserved;
   // eslint-disable-next-line no-console
   console.log(
     passed

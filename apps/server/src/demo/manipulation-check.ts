@@ -37,6 +37,12 @@ export interface ManipulationCheckReport {
   manipulatedComponentTypes: string[];
   /** Expanded candidate gained Checklist+SourceNotice and the pinned one gained ScoreBreakdown. */
   subCardsComposed: boolean;
+  /**
+   * The manipulated visible order is grouped by candidate: PersonaSelector (if
+   * any) first, each candidate's cards contiguous in the fixed order, pinned
+   * groups before the others, DeadlineList (if any) last.
+   */
+  groupedOrderPreserved: boolean;
 }
 
 type CompositionEvent = Extract<ServerEvent, { kind: "composition" }>;
@@ -102,6 +108,51 @@ function benefitCards(composition: CompositionEvent) {
 
 function componentTypes(composition: CompositionEvent): string[] {
   return [...new Set(visibleCards(composition).map((card) => card.componentType))].sort();
+}
+
+/** In-group position of the candidate-scoped components (spec: BenefitCard → ScoreBreakdown → Checklist → SourceNotice). */
+const GROUP_RANK: Readonly<Record<string, number>> = {
+  BenefitCard: 0,
+  ScoreBreakdown: 1,
+  Checklist: 2,
+  SourceNotice: 3,
+};
+
+/**
+ * True when a visible card sequence follows the candidate-group layout:
+ * PersonaSelector cards form a prefix, DeadlineList cards a suffix, everything
+ * in between belongs to a candidate group whose cards are contiguous and in the
+ * fixed in-group order, and every pinned group precedes every unpinned one.
+ */
+export function groupedOrderHolds(
+  cards: ReadonlyArray<{ componentType: string; entityId?: string }>,
+  pinnedEntityIds: ReadonlySet<string>,
+): boolean {
+  let start = 0;
+  while (start < cards.length && cards[start]!.componentType === "PersonaSelector") start += 1;
+  let end = cards.length;
+  while (end > start && cards[end - 1]!.componentType === "DeadlineList") end -= 1;
+
+  const finished = new Set<string>();
+  let previous: { entityId: string; rank: number } | undefined;
+  let sawUnpinnedGroup = false;
+  for (const card of cards.slice(start, end)) {
+    const rank = GROUP_RANK[card.componentType];
+    if (rank === undefined || card.entityId === undefined) return false;
+    if (previous?.entityId === card.entityId) {
+      if (rank < previous.rank) return false;
+    } else {
+      if (previous) finished.add(previous.entityId);
+      if (finished.has(card.entityId)) return false; // the group was split
+      if (pinnedEntityIds.has(card.entityId)) {
+        if (sawUnpinnedGroup) return false; // a pinned group was buried
+      } else {
+        sawUnpinnedGroup = true;
+      }
+    }
+    previous = { entityId: card.entityId, rank };
+  }
+  return true;
 }
 
 /**
@@ -345,6 +396,7 @@ export async function runManipulationCheck(
       has("Checklist", reordered.entityId) &&
       has("SourceNotice", reordered.entityId) &&
       has("ScoreBreakdown", pinned.entityId);
+    const groupedOrderPreserved = groupedOrderHolds(manipulatedVisible, new Set([pinned.entityId]));
 
     return {
       query: options.query,
@@ -363,6 +415,7 @@ export async function runManipulationCheck(
       controlComponentTypes: componentTypes(control),
       manipulatedComponentTypes: componentTypes(manipulated),
       subCardsComposed,
+      groupedOrderPreserved,
     };
   } finally {
     rmSync(traceDir, { recursive: true, force: true });

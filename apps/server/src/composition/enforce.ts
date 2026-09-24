@@ -27,6 +27,14 @@ export interface EnforcedComposition {
  * visible order (they ride in a hidden tail), pinned cards stay present and
  * first, and an explicit reorder survives the next composition. A non-compliant
  * provider cannot undo these user actions.
+ *
+ * The visible order is built from candidate groups (spec rules 6/7): a
+ * PersonaSelector first, then each candidate's BenefitCard with its sub-cards in
+ * the fixed BenefitCard → ScoreBreakdown → Checklist → SourceNotice order —
+ * pinned groups first, then the user's order when they reordered, then the
+ * provider's — then sub-cards left without a visible BenefitCard, and
+ * DeadlineList last. `spec.cards` is returned in `spec.order`, so every consumer
+ * (wire card list, A2UI messages, metadata) sees one order.
  */
 export function enforceManipulationInvariants(
   spec: CompositionSpec,
@@ -56,10 +64,17 @@ export function enforceManipulationInvariants(
   const visibleSpecIds = new Set(visibleSpecCards.map((card) => card.cardId));
   const baseOrder = spec.order.filter((cardId) => visibleSpecIds.has(cardId));
   // Hidden wins if both independent flags are true: a pin controls ordering
-  // only while the card is visible and must never resurrect a hidden card.
-  const pinned = current.cards.filter((card) => card.pinned && !card.hidden && card.entityId);
+  // only while the card is visible and must never resurrect a hidden card —
+  // nor a sub-card of a candidate whose BenefitCard is hidden.
+  const pinned = current.cards.filter(
+    (card) =>
+      card.pinned &&
+      !card.hidden &&
+      card.entityId &&
+      !(card.componentType !== "BenefitCard" && hiddenEntityIds.has(card.entityId)),
+  );
   if (pinned.length === 0 && hiddenKeys.size === 0 && !userReordered) {
-    return { spec, hiddenCardIds: [] };
+    return { spec: { ...spec, cards: inOrder(spec.cards, spec.order) }, hiddenCardIds: [] };
   }
 
   const cards: CardSpec[] = [...visibleSpecCards];
@@ -92,25 +107,7 @@ export function enforceManipulationInvariants(
     pinnedCardIds.push(card.cardId);
   }
 
-  const knownIds = new Set(cards.map((card) => card.cardId));
-  const baseRest = baseOrder.filter((id) => knownIds.has(id) && !pinnedCardIds.includes(id));
-  const currentOrder = userReordered
-    ? current.cards.flatMap((currentCard) => {
-        if (!currentCard.entityId || currentCard.hidden) return [];
-        const match = cards.find(
-          (card) =>
-            card.componentType === currentCard.componentType &&
-            card.entityRef.entityId === currentCard.entityId,
-        );
-        return match && !pinnedCardIds.includes(match.cardId) ? [match.cardId] : [];
-      })
-    : [];
-  const rest = [
-    ...new Set([...currentOrder, ...baseRest.filter((cardId) => !currentOrder.includes(cardId))]),
-  ];
-  const appended = cards
-    .map((card) => card.cardId)
-    .filter((id) => !pinnedCardIds.includes(id) && !rest.includes(id));
+  const visibleOrder = groupedVisibleOrder(cards, baseOrder, pinnedCardIds, current, userReordered);
 
   // Hidden tail: exactly one card per hidden semantic key, provider's card if it
   // emitted one, otherwise restored from the cache.
@@ -137,15 +134,110 @@ export function enforceManipulationInvariants(
     hiddenTail.push(card);
   }
   const hiddenCardIds = hiddenTail.map((card) => card.cardId);
+  const order = [...visibleOrder, ...hiddenCardIds];
 
   return {
     spec: {
       ...spec,
-      cards: [...cards, ...hiddenTail],
-      order: [...pinnedCardIds, ...rest, ...appended, ...hiddenCardIds],
+      cards: inOrder([...cards, ...hiddenTail], order),
+      order,
     },
     hiddenCardIds,
   };
+}
+
+/** In-group position of the candidate-scoped components; other types are singletons. */
+const GROUP_RANK: Partial<Record<CatalogComponentType, number>> = {
+  BenefitCard: 0,
+  ScoreBreakdown: 1,
+  Checklist: 2,
+  SourceNotice: 3,
+};
+
+/**
+ * Visible order by candidate group: PersonaSelector → pinned groups (a pin on
+ * any card of a group pins the group, in the order the pinned rows appear) →
+ * the remaining groups with a visible BenefitCard (the user's BenefitCard row
+ * order when they reordered, otherwise the provider position of the group's
+ * first card) → sub-cards without a visible BenefitCard (provider order) →
+ * DeadlineList.
+ */
+function groupedVisibleOrder(
+  cards: readonly CardSpec[],
+  providerOrder: readonly string[],
+  pinnedCardIds: readonly string[],
+  current: CurrentComposition,
+  userReordered: boolean,
+): string[] {
+  // Restored pins are not in the provider order; they sort after it, in insertion order.
+  const position = new Map(providerOrder.map((cardId, index) => [cardId, index] as const));
+  cards.forEach((card, index) => {
+    if (!position.has(card.cardId)) position.set(card.cardId, providerOrder.length + index);
+  });
+  const byPosition = (a: CardSpec, b: CardSpec) =>
+    (position.get(a.cardId) ?? 0) - (position.get(b.cardId) ?? 0);
+  const inProviderOrder = [...cards].sort(byPosition);
+  const isGrouped = (card: CardSpec) => GROUP_RANK[card.componentType] !== undefined;
+
+  // Map insertion order = provider position of each group's first card.
+  const groups = new Map<string, CardSpec[]>();
+  for (const card of inProviderOrder.filter(isGrouped)) {
+    const entityId = card.entityRef.entityId;
+    groups.set(entityId, [...(groups.get(entityId) ?? []), card]);
+  }
+  for (const members of groups.values()) {
+    members.sort(
+      (a, b) => (GROUP_RANK[a.componentType] ?? 0) - (GROUP_RANK[b.componentType] ?? 0) || byPosition(a, b),
+    );
+  }
+
+  const cardById = new Map(cards.map((card) => [card.cardId, card]));
+  const pinnedEntities: string[] = [];
+  for (const cardId of pinnedCardIds) {
+    const card = cardById.get(cardId);
+    if (!card || !isGrouped(card)) continue;
+    if (!pinnedEntities.includes(card.entityRef.entityId)) pinnedEntities.push(card.entityRef.entityId);
+  }
+  const unpinned = [...groups.keys()].filter((entityId) => !pinnedEntities.includes(entityId));
+  const anchored = unpinned.filter((entityId) =>
+    groups.get(entityId)!.some((card) => card.componentType === "BenefitCard"),
+  );
+  if (userReordered) {
+    const userIndex = new Map<string, number>();
+    current.cards.forEach((row, index) => {
+      if (row.componentType !== "BenefitCard" || !row.entityId || row.hidden) return;
+      if (!userIndex.has(row.entityId)) userIndex.set(row.entityId, index);
+    });
+    // Stable: groups the user never saw keep their provider position after the user's rows.
+    anchored.sort(
+      (a, b) =>
+        (userIndex.get(a) ?? Number.MAX_SAFE_INTEGER) - (userIndex.get(b) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+  const orphanEntities = new Set(unpinned.filter((entityId) => !anchored.includes(entityId)));
+
+  const ordered = [
+    ...inProviderOrder.filter((card) => card.componentType === "PersonaSelector"),
+    ...pinnedEntities.flatMap((entityId) => groups.get(entityId) ?? []),
+    ...anchored.flatMap((entityId) => groups.get(entityId) ?? []),
+    ...inProviderOrder.filter((card) => isGrouped(card) && orphanEntities.has(card.entityRef.entityId)),
+  ];
+  const placed = new Set(ordered.map((card) => card.cardId));
+  const trailing = inProviderOrder.filter((card) => card.componentType === "DeadlineList");
+  // Any other (future) singleton keeps its provider position before DeadlineList.
+  const others = inProviderOrder.filter(
+    (card) => !placed.has(card.cardId) && card.componentType !== "DeadlineList",
+  );
+  return [...ordered, ...others, ...trailing].map((card) => card.cardId);
+}
+
+/** `cards` rearranged to follow `order` (both hold the exact same cardId set). */
+function inOrder(cards: readonly CardSpec[], order: readonly string[]): CardSpec[] {
+  const byId = new Map(cards.map((card) => [card.cardId, card]));
+  return order.flatMap((cardId) => {
+    const card = byId.get(cardId);
+    return card ? [card] : [];
+  });
 }
 
 const PIN_RATIONALE = "사용자가 고정한 카드입니다.";
