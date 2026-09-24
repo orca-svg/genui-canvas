@@ -27,6 +27,35 @@ describe("createSession", () => {
     );
     await expect(createSession()).rejects.toThrow();
   });
+
+  it("reads the server-issued next sequence and defaults it to zero when absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ sessionId: "11111111-1111-4111-8111-111111111111", nextSeq: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    await expect(createSession()).resolves.toEqual({
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      nextSeq: 1,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ sessionId: "11111111-1111-4111-8111-111111111111" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    await expect(createSession()).resolves.toEqual({
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      nextSeq: 0,
+    });
+  });
 });
 
 describe("postEvent", () => {

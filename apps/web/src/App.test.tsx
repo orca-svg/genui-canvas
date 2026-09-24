@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.js";
@@ -54,6 +54,116 @@ function compositionSseFor(
         : {}),
     })),
   })}\n\n`;
+}
+
+const CATALOG = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
+
+function sseFrame(event: Record<string, unknown>): string {
+  return `event: ${String(event.kind)}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function interactiveCompositionSse(options: { nextSeq?: number; hiddenEntityId?: string } = {}): string {
+  const messages = [
+    { version: "v0.9", createSurface: { surfaceId: "card-a", catalogId: CATALOG } },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "card-a",
+        components: [{ id: "root", component: "Text", text: { path: "/title" } }],
+      },
+    },
+    { version: "v0.9", updateDataModel: { surfaceId: "card-a", path: "/", value: { title: "혜택 A 본문" } } },
+    { version: "v0.9", createSurface: { surfaceId: "checklist-a", catalogId: CATALOG } },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "checklist-a",
+        components: [
+          { id: "root", component: "Column", children: ["check-0"] },
+          { id: "check-0", component: "CheckBox", label: { path: "/item0Text" }, value: { path: "/checked0" } },
+        ],
+      },
+    },
+    {
+      version: "v0.9",
+      updateDataModel: { surfaceId: "checklist-a", path: "/", value: { item0Text: "재학증명서", checked0: false } },
+    },
+    { version: "v0.9", createSurface: { surfaceId: "personas", catalogId: CATALOG } },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "personas",
+        components: [
+          { id: "root", component: "Column", children: ["persona-0"] },
+          {
+            id: "persona-0",
+            component: "Button",
+            child: "persona-0-label",
+            action: { event: { name: "persona.select", context: { personaId: "senior" } } },
+          },
+          { id: "persona-0-label", component: "Text", text: { path: "/persona0Label" } },
+        ],
+      },
+    },
+    { version: "v0.9", updateDataModel: { surfaceId: "personas", path: "/", value: { persona0Label: "시니어" } } },
+    ...(options.hiddenEntityId
+      ? [
+          { version: "v0.9", createSurface: { surfaceId: `card-${options.hiddenEntityId}`, catalogId: CATALOG } },
+          {
+            version: "v0.9",
+            updateComponents: {
+              surfaceId: `card-${options.hiddenEntityId}`,
+              components: [{ id: "root", component: "Text", text: { path: "/title" } }],
+            },
+          },
+          {
+            version: "v0.9",
+            updateDataModel: { surfaceId: `card-${options.hiddenEntityId}`, path: "/", value: { title: "숨긴 혜택 본문" } },
+          },
+        ]
+      : []),
+  ];
+  const cards = [
+    { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "혜택 A", emphasis: "primary" },
+    { cardId: "checklist-a", entityId: "a", componentType: "Checklist", title: "혜택 A · 신청 준비", itemCount: 1 },
+    { cardId: "personas", componentType: "PersonaSelector", title: "추천 관점" },
+    ...(options.hiddenEntityId
+      ? [{ cardId: `card-${options.hiddenEntityId}`, entityId: options.hiddenEntityId, componentType: "BenefitCard", title: "숨긴 혜택", hidden: true }]
+      : []),
+  ];
+  return (
+    sseFrame({ kind: "intent", text: "테스트 의도 문장" }) +
+    sseFrame({ kind: "composition", compositionId: "comp-interactive", messages, cards, ...(options.nextSeq !== undefined ? { nextSeq: options.nextSeq } : {}) })
+  );
+}
+
+/** fetch mock: session → interactive composition on every turn; collects event and turn bodies. */
+function interactiveFetch(options: { nextSeq?: number; hiddenEntityId?: string; sessionNextSeq?: number } = {}) {
+  const eventBodies: Array<Record<string, unknown>> = [];
+  const turnBodies: Array<Record<string, unknown>> = [];
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/session")) {
+      return new Response(
+        JSON.stringify({ sessionId: SESSION_ID, ...(options.sessionNextSeq !== undefined ? { nextSeq: options.sessionNextSeq } : {}) }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/api/events")) {
+      eventBodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (url.endsWith("/api/turn")) {
+      turnBodies.push(JSON.parse(String(init?.body)));
+      return new Response(interactiveCompositionSse(options), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { eventBodies, turnBodies };
 }
 
 afterEach(() => {
@@ -618,5 +728,71 @@ describe("App", () => {
         }),
       ),
     );
+  });
+});
+
+describe("App — interactive catalog", () => {
+  it("adopts the server-issued sequence from the session and from each turn", async () => {
+    const { eventBodies } = interactiveFetch({ sessionNextSeq: 1, nextSeq: 5 });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    expect(await screen.findByText("혜택 A")).toBeInTheDocument();
+    await waitFor(() => expect(eventBodies).toHaveLength(2));
+    expect(eventBodies[0]).toMatchObject({ seq: 1, type: "query.submit" });
+    expect(eventBodies[1]).toMatchObject({ seq: 5, type: "composition.applied" });
+  });
+
+  it("shows the server's intent sentence and the undo-reset notice after a composition", async () => {
+    interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    expect(await screen.findByText("혜택 A")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장");
+  });
+
+  it("records checklist ticks as trace events and undoes them with the inverse event", async () => {
+    const { eventBodies } = interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const box = await screen.findByRole("checkbox", { name: "재학증명서" });
+    await user.click(box);
+    await waitFor(() =>
+      expect(eventBodies.at(-1)).toMatchObject({
+        type: "checklist.check",
+        payload: { itemIndex: 0 },
+        target: { cardId: "checklist-a", entityId: "a", componentType: "Checklist" },
+      }),
+    );
+    expect((box as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "실행 취소" }));
+    await waitFor(() => expect(eventBodies.at(-1)).toMatchObject({ type: "checklist.uncheck", payload: { itemIndex: 0 } }));
+    expect(((await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("switches persona from a server-composed button through the normal composition point", async () => {
+    const { eventBodies, turnBodies } = interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await user.click(await screen.findByRole("button", { name: "시니어" }));
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    expect(turnBodies[1]).toMatchObject({ trigger: { type: "persona.switch", personaId: "senior" } });
+    expect(eventBodies.some((e) => e.type === "persona.switch" && (e.payload as { personaId: string }).personaId === "senior")).toBe(true);
+    expect((screen.getByRole("combobox", { name: "추천 관점" }) as HTMLSelectElement).value).toBe("senior");
+  });
+
+  it("keeps a hidden card in the shell after recomposition so it can be shown again", async () => {
+    interactiveFetch({ hiddenEntityId: "z" });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const canvas = within(screen.getByRole("region", { name: "추천 결과" }));
+    expect(await canvas.findByText("혜택 A 본문")).toBeInTheDocument();
+    expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" }));
+    expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
   });
 });

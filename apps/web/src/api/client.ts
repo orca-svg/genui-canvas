@@ -34,14 +34,24 @@ export interface TurnBody {
   query?: string;
 }
 
-export async function createSession(): Promise<string> {
+export interface SessionHandle {
+  sessionId: string;
+  /** Sequence the client must use for its first trace event (server records session.start first). */
+  nextSeq: number;
+}
+
+export async function createSession(): Promise<SessionHandle> {
   const res = await fetch(`${API_BASE}/api/session`, {
     method: "POST",
     signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
   });
   assertOk(res, "create session");
-  const body = (await res.json()) as { sessionId?: unknown };
-  return SessionIdSchema.parse(body.sessionId);
+  const body = (await res.json()) as { sessionId?: unknown; nextSeq?: unknown };
+  const nextSeq =
+    typeof body.nextSeq === "number" && Number.isInteger(body.nextSeq) && body.nextSeq >= 0
+      ? body.nextSeq
+      : 0;
+  return { sessionId: SessionIdSchema.parse(body.sessionId), nextSeq };
 }
 
 export async function postEvent(event: InteractionEvent): Promise<void> {

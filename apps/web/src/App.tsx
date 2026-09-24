@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { CanvasSurfaces, type A2uiMessages } from "@genui-canvas/renderer";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  CanvasSurfaces,
+  type A2uiMessages,
+  type CanvasActionEvent,
+  type CanvasValueChange,
+} from "@genui-canvas/renderer";
 import {
   createShellState,
   shellReducer,
@@ -12,8 +17,12 @@ import {
   deriveCompositionRejectedEvent,
   deriveInteractionEvent,
 } from "./state/interaction-log.js";
-import type { CatalogComponentType, InteractionEvent } from "@genui-canvas/contracts";
-import { createSession, postEvent, postTurn, type TurnBody } from "./api/client.js";
+import {
+  CanvasActionSchema,
+  type CompositionCard,
+  type InteractionEvent,
+} from "@genui-canvas/contracts";
+import { createSession, postEvent, postTurn, type SessionHandle, type TurnBody } from "./api/client.js";
 import { CardFrame } from "./components/CardFrame.js";
 
 interface Scenario {
@@ -71,6 +80,10 @@ function inverseAction(entry: HistoryEntry): ShellAction {
         cardId: action.cardId,
         toIndex: Math.max(0, before.cards.findIndex((card) => card.cardId === action.cardId)),
       };
+    case "checklist.check":
+      return { type: "checklist.uncheck", cardId: action.cardId, itemIndex: action.itemIndex };
+    case "checklist.uncheck":
+      return { type: "checklist.check", cardId: action.cardId, itemIndex: action.itemIndex };
   }
 }
 
@@ -84,7 +97,8 @@ function sameShell(left: ShellState, right: ShellState): boolean {
         card.cardId === other.cardId &&
         card.pinned === other.pinned &&
         card.hidden === other.hidden &&
-        card.expanded === other.expanded
+        card.expanded === other.expanded &&
+        card.checkedItems.join(",") === other.checkedItems.join(",")
       );
     })
   );
@@ -122,18 +136,7 @@ function toCurrentComposition(shell: ShellState): TurnBody["currentComposition"]
 }
 
 /** Rebuild shell from a new composition, carrying over the user's flags. */
-function mergeShell(
-  prev: ShellState,
-  compositionId: string,
-  cards: Array<{
-    cardId: string;
-    entityId?: string;
-    componentType: CatalogComponentType;
-    title?: string;
-    sourceUrl?: string;
-    sourceCheckedAt?: string;
-  }>,
-): ShellState {
+function mergeShell(prev: ShellState, compositionId: string, cards: CompositionCard[]): ShellState {
   const next = createShellState(compositionId, cards);
   const semanticFlags = new Map<string, ShellState["cards"][number]>();
   const idFlags = new Map(prev.cards.map((card) => [card.cardId, card]));
@@ -147,7 +150,15 @@ function mergeShell(
     cards: next.cards.map((c) => {
       const semanticKey = c.entityId ? `${c.componentType}::${c.entityId}` : undefined;
       const old = (semanticKey ? semanticFlags.get(semanticKey) : undefined) ?? idFlags.get(c.cardId);
-      return old ? { ...c, pinned: old.pinned, hidden: old.hidden, expanded: old.expanded } : c;
+      return old
+        ? {
+            ...c,
+            pinned: old.pinned,
+            hidden: c.hidden || old.hidden,
+            expanded: old.expanded,
+            checkedItems: old.checkedItems,
+          }
+        : c;
     }),
   };
 }
@@ -166,7 +177,9 @@ export function App() {
   const scenarioRef = useRef<Scenario>(SCENARIOS[0]!);
   const seqRef = useRef(0);
   const traceQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const sessionRequestRef = useRef<Promise<string> | null>(null);
+  const sessionRequestRef = useRef<Promise<SessionHandle> | null>(null);
+  const shellRef = useRef<ShellState>(shell);
+  shellRef.current = shell;
   const compositionBaselineRef = useRef<ShellState>(shell);
   const pastRef = useRef<HistoryEntry[]>([]);
   const futureRef = useRef<HistoryEntry[]>([]);
@@ -179,15 +192,40 @@ export function App() {
   // cards dropped, expanded flag passed through — no server round-trip.
   const layout = shell.cards
     .filter((c) => !c.hidden)
-    .map((c) => ({ cardId: c.cardId, expanded: c.expanded }));
+    .map((c) => ({ cardId: c.cardId, expanded: c.expanded, emphasis: c.emphasis }));
+  const checklistCards = useMemo(
+    () => shell.cards.filter((c) => c.componentType === "Checklist" && typeof c.itemCount === "number"),
+    [shell],
+  );
+  const watch = useMemo(
+    () =>
+      checklistCards.map((c) => ({
+        surfaceId: c.cardId,
+        paths: Array.from({ length: c.itemCount ?? 0 }, (_, i) => `/checked${i}`),
+      })),
+    [checklistCards],
+  );
+  const values = useMemo(
+    () =>
+      checklistCards.flatMap((c) =>
+        Array.from({ length: c.itemCount ?? 0 }, (_, i) => ({
+          surfaceId: c.cardId,
+          path: `/checked${i}`,
+          value: c.checkedItems.includes(i),
+        })),
+      ),
+    [checklistCards],
+  );
 
   useEffect(() => {
     let active = true;
     const request = sessionRequestRef.current ?? createSession();
     sessionRequestRef.current = request;
     request
-      .then((id) => {
-        if (active) setSessionId(id);
+      .then((handle) => {
+        if (!active) return;
+        seqRef.current = handle.nextSeq;
+        setSessionId(handle.sessionId);
       })
       .catch(() => {
         if (sessionRequestRef.current === request) sessionRequestRef.current = null;
@@ -237,6 +275,10 @@ export function App() {
       });
       const composition = events.find((e) => e.kind === "composition");
       const error = events.find((e) => e.kind === "error");
+      const terminal = composition ?? error;
+      if (terminal && typeof terminal.nextSeq === "number") seqRef.current = terminal.nextSeq;
+      const intentEvent = events.find((e) => e.kind === "intent");
+      const hadHistory = pastRef.current.length > 0 || futureRef.current.length > 0;
       if (composition && composition.kind === "composition") {
         const nextShell = mergeShell(current, composition.compositionId, composition.cards);
         setMessages(composition.messages as unknown as A2uiMessages);
@@ -244,11 +286,13 @@ export function App() {
         compositionBaselineRef.current = nextShell;
         setDirty(false);
         clearHistory();
-        setIntent(
-          composition.cards.length > 0
-            ? `${composition.cards.length}개 카드를 구성했습니다.`
-            : "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요.",
-        );
+        const summary =
+          intentEvent && intentEvent.kind === "intent"
+            ? intentEvent.text
+            : composition.cards.length > 0
+              ? `${composition.cards.length}개 카드를 구성했습니다.`
+              : "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요.";
+        setIntent(hadHistory ? `${summary} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : summary);
         try {
           await enqueueTrace((seq) =>
             deriveCompositionAppliedEvent(nextShell, {
@@ -305,8 +349,8 @@ export function App() {
     void runTurn(scenario, shell);
   }
 
-  function switchPersona(event: ChangeEvent<HTMLSelectElement>) {
-    const personaId = event.target.value;
+  function applyPersona(personaId: string) {
+    if (busy || !sessionId) return;
     setPersona(personaId);
     const draftQuery = query.trim();
     const queryChanged = draftQuery.length > 0 && draftQuery !== scenarioRef.current.query;
@@ -318,7 +362,38 @@ export function App() {
         : { ...scenarioRef.current.profile, persona: personaId },
     };
     scenarioRef.current = next;
-    void runTurn(next, shell, { type: "persona.switch", personaId });
+    void runTurn(next, shellRef.current, { type: "persona.switch", personaId });
+  }
+
+  function switchPersona(event: ChangeEvent<HTMLSelectElement>) {
+    applyPersona(event.target.value);
+  }
+
+  // A server-composed Button reaches the shell here. It is re-validated against
+  // the canvas action contract and mapped onto the same composition point the
+  // sidebar control uses — never executed as-is.
+  function handleCanvasAction(action: CanvasActionEvent) {
+    const parsed = CanvasActionSchema.safeParse({ name: action.name, context: action.context });
+    if (!parsed.success) {
+      setIntent("알 수 없는 카드 동작은 무시했습니다.");
+      return;
+    }
+    if (parsed.data.name === "persona.select") applyPersona(parsed.data.context.personaId);
+  }
+
+  // A CheckBox edit reaches the shell here; ignore echoes of shell-driven writes.
+  function handleCanvasValue(change: CanvasValueChange) {
+    const match = /^\/checked(\d{1,2})$/.exec(change.path);
+    if (!match || typeof change.value !== "boolean") return;
+    const itemIndex = Number(match[1]);
+    const card = shellRef.current.cards.find((c) => c.cardId === change.surfaceId);
+    if (!card || card.componentType !== "Checklist") return;
+    if (card.checkedItems.includes(itemIndex) === change.value) return;
+    manipulate({
+      type: change.value ? "checklist.check" : "checklist.uncheck",
+      cardId: card.cardId,
+      itemIndex,
+    });
   }
 
   function submitQuery(event: FormEvent<HTMLFormElement>) {
@@ -345,7 +420,7 @@ export function App() {
   // re-compose — that is reserved for composition points, so scroll position
   // and focus are preserved.
   function manipulate(action: ShellAction) {
-    const before = shell;
+    const before = shellRef.current;
     const after = shellReducer(before, action);
     if (sameShell(before, after)) return;
     pastRef.current = [...pastRef.current.slice(-49), { action, before, after }];
@@ -353,7 +428,11 @@ export function App() {
     syncHistoryAvailability();
     setShell(after);
     setDirty(!sameShell(after, compositionBaselineRef.current));
-    setIntent("조작이 즉시 반영됐어요 · ‘조작 반영해 재구성’으로 추천을 갱신할 수 있어요.");
+    setIntent(
+      action.type.startsWith("checklist.")
+        ? "준비 메모를 기록했어요 · 이 기기의 체크 상태이며 신청 상태가 아닙니다."
+        : "조작이 즉시 반영됐어요 · ‘조작 반영해 재구성’으로 추천을 갱신할 수 있어요.",
+    );
     if (sessionId) {
       void enqueueTrace((seq) =>
         deriveInteractionEvent(action, before, { sessionId, seq }),
@@ -421,7 +500,7 @@ export function App() {
   // Composition point: re-run the LLM composition folding in the accumulated
   // interaction trace (server computes the trace summary from the log).
   function recompose() {
-    void runTurn(scenarioRef.current, shell);
+    void runTurn(scenarioRef.current, shellRef.current);
   }
 
   return (
@@ -501,7 +580,14 @@ export function App() {
           aria-label="추천 결과"
           tabIndex={-1}
         >
-          <CanvasSurfaces messages={messages} layout={layout} />
+          <CanvasSurfaces
+            messages={messages}
+            layout={layout}
+            onAction={handleCanvasAction}
+            watch={watch}
+            values={values}
+            onValueChange={handleCanvasValue}
+          />
         </section>
 
         <aside className="controls" aria-label="카드 조작">
