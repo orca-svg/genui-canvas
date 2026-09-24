@@ -54,6 +54,7 @@ export interface CompositionCardMetadata {
   title: string;
   sourceUrl?: string;
   sourceCheckedAt?: string;
+  hidden?: boolean;
 }
 
 const MAX_COMPOSITION_CANDIDATES = 12;
@@ -174,29 +175,32 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
   // Stage 4: direct-manipulation invariants are enforced server-side, so the
   // provider cannot restore hidden cards, bury pinned cards, or erase an
   // explicit user ordering signal.
-  const spec = enforceManipulationInvariants(
+  const enforced = enforceManipulationInvariants(
     validation.spec,
     request.currentComposition,
     cache,
     request.traceSummary.orderingSignal?.userReordered === true,
-  ).spec;
+  );
+  const spec = enforced.spec;
   const messages = expandComposition(spec, cache);
-  return { ok: true, spec, messages, cardMetadata: buildCardMetadata(spec, cache) };
+  const hiddenCardIds = new Set(enforced.hiddenCardIds);
+  return { ok: true, spec, messages, cardMetadata: buildCardMetadata(spec, cache, hiddenCardIds) };
 }
 
 function buildCardMetadata(
   spec: CompositionSpec,
   cache: ToolResultCache,
+  hiddenCardIds: Set<string>,
 ): CompositionCardMetadata[] {
   return spec.order.flatMap((cardId) => {
     const card = spec.cards.find((candidate) => candidate.cardId === cardId);
     if (!card) return [];
 
     if (card.componentType === "DeadlineList") {
-      return [{ cardId, title: "다가오는 신청 마감" }];
+      return [{ cardId, title: "다가오는 신청 마감", ...(hiddenCardIds.has(cardId) ? { hidden: true } : {}) }];
     }
     if (card.componentType === "PersonaSelector") {
-      return [{ cardId, title: "추천 관점" }];
+      return [{ cardId, title: "추천 관점", ...(hiddenCardIds.has(cardId) ? { hidden: true } : {}) }];
     }
 
     const entityId = card.entityRef.entityId;
@@ -217,6 +221,7 @@ function buildCardMetadata(
       cardId,
       title: `${baseTitle}${suffix[card.componentType] ?? ""}`,
     };
+    if (hiddenCardIds.has(cardId)) metadata.hidden = true;
     const sourceLink = preferredOfficialLink(detail.links, "source");
     if (sourceLink) metadata.sourceUrl = sourceLink.url;
     const freshness = asRecord(detail.freshness);

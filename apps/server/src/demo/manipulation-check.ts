@@ -83,8 +83,13 @@ async function postTurn(app: App, body: Record<string, unknown>): Promise<Compos
   return parseComposition(await response.text());
 }
 
+/** Cards in the visible order: the hidden tail is shipped but never shown. */
+function visibleCards(composition: CompositionEvent) {
+  return composition.cards.filter((card) => card.hidden !== true);
+}
+
 function benefitCards(composition: CompositionEvent) {
-  return composition.cards.filter(
+  return visibleCards(composition).filter(
     (card): card is typeof card & { entityId: string } =>
       card.componentType === "BenefitCard" && typeof card.entityId === "string",
   );
