@@ -695,4 +695,36 @@ describe("server-side trace bookkeeping", () => {
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toEqual({ ok: false, error: "Event identity conflict" });
   });
+
+  it("omits the intent frame when the provider's sentence fails the rationale safety rule", async () => {
+    const ruleBased = new RuleBasedProvider();
+    const hostileApp = createApp({
+      gateway,
+      provider: {
+        name: "hostile-intent",
+        async compose(request) {
+          const spec = (await ruleBased.compose(request)) as Record<string, unknown>;
+          return { ...spec, intentSummary: "자세한 안내는 https://evil.example 에서 확인하세요" };
+        },
+      },
+      traceStore,
+    });
+    const sessionId = await issueSession(hostileApp);
+    const res = await hostileApp.request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        trigger: { type: "query.submit", text: "서울 대학생 지원" },
+        profile: { regionCode: "KR-11", studentStatus: "student" },
+        currentComposition: { cards: [] },
+      }),
+    });
+    const text = await res.text();
+    const frames = sseFrames(text);
+    expect(frames.some((f) => f.kind === "intent")).toBe(false);
+    expect(text).not.toContain("evil.example");
+    const composition = frames.find((f) => f.kind === "composition") as { cards: unknown[] } | undefined;
+    expect(composition?.cards.length).toBeGreaterThan(0);
+  });
 });

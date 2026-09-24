@@ -9,6 +9,7 @@ import {
   CompositionTriggerSchema,
   CurrentCompositionSchema,
   InteractionEventSchema,
+  SafeIntentSummarySchema,
   ServerEventSchema,
   SessionIdSchema,
   StrictUserProfileSchema,
@@ -187,11 +188,13 @@ export function createApp(deps: AppDeps) {
           );
         }
         if (result.ok) {
-          const intentText = result.spec.intentSummary.trim();
-          if (intentText.length > 0) {
+          // The sentence is model-written: stream it only when it passes the
+          // rationale safety rule; otherwise the shell shows its own count line.
+          const intent = SafeIntentSummarySchema.safeParse(result.spec.intentSummary);
+          if (intent.success) {
             await stream.writeSSE({
               event: "intent",
-              data: JSON.stringify(ServerEventSchema.parse({ kind: "intent", text: intentText })),
+              data: JSON.stringify(ServerEventSchema.parse({ kind: "intent", text: intent.data })),
             });
           }
           const metadataByCardId = new Map(

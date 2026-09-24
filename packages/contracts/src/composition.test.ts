@@ -3,6 +3,7 @@ import {
   CompositionSpecSchema,
   CompositionContextSchema,
   EntityEngagementSchema,
+  SafeIntentSummarySchema,
   TraceSummarySchema,
 } from "./composition.js";
 
@@ -230,5 +231,31 @@ describe("EntityEngagementSchema (trace-derived)", () => {
 
   it("rejects a checked row outside the 90-row bound", () => {
     expect(EntityEngagementSchema.safeParse({ ...base, checkedItems: [90] }).success).toBe(false);
+  });
+});
+
+describe("SafeIntentSummarySchema", () => {
+  it("accepts the rule-based intent sentence", () => {
+    expect(
+      SafeIntentSummarySchema.safeParse("3개 후보를 상대 관련도와 사용자 조작을 반영해 구성했습니다.").success,
+    ).toBe(true);
+  });
+
+  it("rejects a URL, markup, a definitive eligibility claim, blank text, and overlong text", () => {
+    for (const text of [
+      "자세한 내용은 https://evil.example 에서 확인하세요",
+      "<script>x</script> 후보",
+      "이 혜택을 받을 수 있습니다",
+      "   ",
+      "가".repeat(501),
+    ]) {
+      expect(SafeIntentSummarySchema.safeParse(text).success).toBe(false);
+    }
+  });
+
+  it("does not make a bad intent summary reject the whole composition", () => {
+    expect(
+      CompositionSpecSchema.safeParse({ ...validSpec, intentSummary: "https://evil.example" }).success,
+    ).toBe(true);
   });
 });
