@@ -167,6 +167,7 @@ describe("CanvasSurfaces — interactive primitives", () => {
     expect(onAction.mock.calls[0]?.[0]).toMatchObject({
       name: "persona.select",
       surfaceId: "card-1",
+      sourceComponentId: "btn",
       context: { personaId: "senior" },
     });
   });
@@ -194,6 +195,25 @@ describe("CanvasSurfaces — interactive primitives", () => {
     expect(((await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement).checked).toBe(false);
     // the shell-driven write must not echo back as a user edit
     expect(onValueChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not echo a shell value supplied together with the watch list, and still reports a real edit once", async () => {
+    const onValueChange = vi.fn();
+    const watch = [{ surfaceId: "checklist-1", paths: ["/checked0"] }];
+    render(
+      <CanvasSurfaces
+        messages={checklistMessages}
+        watch={watch}
+        values={[{ surfaceId: "checklist-1", path: "/checked0", value: true }]}
+        onValueChange={onValueChange}
+      />,
+    );
+    const box = (await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(onValueChange).not.toHaveBeenCalled();
+    fireEvent.click(box);
+    expect(onValueChange).toHaveBeenCalledTimes(1);
+    expect(onValueChange).toHaveBeenCalledWith({ surfaceId: "checklist-1", path: "/checked0", value: false });
   });
 
   it("exposes emphasis on the card wrapper for styling", async () => {

@@ -10,6 +10,11 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 
+/**
+ * Minimal renderer that treats agent text as plain text (HTML-escaped). Rich
+ * markdown is a v2 polish (wire @a2ui/markdown-it); benefit copy is plain, and
+ * escaping keeps gateway strings safe from HTML injection.
+ */
 const plainTextMarkdownRenderer = async (markdown: string): Promise<string> =>
   markdown.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
 
@@ -41,6 +46,12 @@ export interface CanvasValueChange {
 
 export interface CanvasSurfacesProps {
   messages: A2uiMessages;
+  /**
+   * Shell-driven display order / visibility / expansion. When provided, cards
+   * render in this order, hidden cards (absent from the list) are dropped, and
+   * `expanded` is exposed as `data-expanded` for styling — all instantly,
+   * without re-composing. When omitted, every surface renders in message order.
+   */
   layout?: CanvasCardLayout[];
   /** Receives Button actions; the shell validates them against its action contract. */
   onAction?: CanvasActionHandler;
@@ -88,20 +99,30 @@ export function CanvasSurfaces({
     };
   }, [processor]);
 
-  // Tracks paths the `values` effect below just wrote, so the watcher effect can
-  // suppress the one echo that write produces instead of reporting it upward as
-  // a user edit.
-  const shellWritesRef = useRef(new Set<string>());
+  // A single delimiter-joined key, shared by both effects below, so a value the
+  // `values` effect writes and a path the `watch` effect subscribes to always
+  // agree on identity regardless of effect ordering within a commit.
+  const valueKey = (surfaceId: string, path: string) => `${surfaceId}\u0000${path}`;
 
-  // Shell-owned values flow into the data model; only real differences are written,
-  // and the watcher below ignores writes it did not observe as changes.
+  // Last value each effect has seen per (surface, path). The `values` effect
+  // records the shell's value BEFORE writing it, so the watcher treats the
+  // resulting notification as already known; a real user edit always differs
+  // from it. Seeded fresh whenever `processor` is rebuilt, since a new
+  // processor means new data models and the old entries no longer apply.
+  const lastValuesRef = useRef(new Map<string, unknown>());
+  const lastProcessorRef = useRef<typeof processor | undefined>(undefined);
+
+  // Shell-owned values flow into the data model; only real differences are
+  // written, and the value is recorded as "known" before the write so the
+  // watcher effect (whether its subscription already exists or is created in
+  // this same commit) never reports the resulting notification upward.
   useEffect(() => {
     if (!values) return;
     for (const { surfaceId, path, value } of values) {
       const surface = processor.model.surfacesMap.get(surfaceId);
       if (!surface) continue;
       if (surface.dataModel.get(path) !== value) {
-        shellWritesRef.current.add(`${surfaceId}${path}`);
+        lastValuesRef.current.set(valueKey(surfaceId, path), value);
         surface.dataModel.set(path, value);
       }
     }
@@ -109,21 +130,25 @@ export function CanvasSurfaces({
 
   // User edits on watched paths flow up as value changes.
   useEffect(() => {
+    if (lastProcessorRef.current !== processor) {
+      lastValuesRef.current.clear();
+      lastProcessorRef.current = processor;
+    }
     if (!watch) return;
     const subscriptions: Array<{ unsubscribe: () => void }> = [];
     for (const { surfaceId, paths } of watch) {
       const surface = processor.model.surfacesMap.get(surfaceId);
       if (!surface) continue;
       for (const path of paths) {
-        let last: unknown = surface.dataModel.get(path);
+        const key = valueKey(surfaceId, path);
+        if (!lastValuesRef.current.has(key)) {
+          lastValuesRef.current.set(key, surface.dataModel.get(path));
+        }
         subscriptions.push(
           surface.dataModel.subscribe(path, (value: unknown) => {
-            if (shellWritesRef.current.delete(`${surfaceId}${path}`)) {
-              last = value;
-              return;
-            }
-            if (value === last) return;
-            last = value;
+            const known = lastValuesRef.current.get(key);
+            if (value === known) return;
+            lastValuesRef.current.set(key, value);
             onValueChangeRef.current?.({ surfaceId, path, value });
           }),
         );
