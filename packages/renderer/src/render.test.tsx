@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { basicCatalog } from "@a2ui/react/v0_9";
 import { CanvasSurfaces, createProcessor } from "./index.js";
 
@@ -115,5 +115,94 @@ describe("CanvasSurfaces", () => {
     const { rerender } = render(<CanvasSurfaces messages={[]} />);
     rerender(<CanvasSurfaces messages={benefitCardMessages} />);
     expect(await screen.findByText("국가장학금")).toBeInTheDocument();
+  });
+});
+
+const personaButtonMessages = [
+  { version: "v0.9", createSurface: { surfaceId: "card-1", catalogId: basicCatalog.id } },
+  {
+    version: "v0.9",
+    updateComponents: {
+      surfaceId: "card-1",
+      components: [
+        { id: "root", component: "Column", children: ["btn"] },
+        {
+          id: "btn",
+          component: "Button",
+          child: "label",
+          variant: "primary",
+          action: { event: { name: "persona.select", context: { personaId: "senior" } } },
+        },
+        { id: "label", component: "Text", text: { path: "/label" } },
+      ],
+    },
+  },
+  { version: "v0.9", updateDataModel: { surfaceId: "card-1", path: "/", value: { label: "시니어" } } },
+];
+
+const checklistMessages = [
+  { version: "v0.9", createSurface: { surfaceId: "checklist-1", catalogId: basicCatalog.id } },
+  {
+    version: "v0.9",
+    updateComponents: {
+      surfaceId: "checklist-1",
+      components: [
+        { id: "root", component: "Column", children: ["check-0"] },
+        { id: "check-0", component: "CheckBox", label: { path: "/item0Text" }, value: { path: "/checked0" } },
+      ],
+    },
+  },
+  {
+    version: "v0.9",
+    updateDataModel: { surfaceId: "checklist-1", path: "/", value: { item0Text: "재학증명서", checked0: false } },
+  },
+];
+
+describe("CanvasSurfaces — interactive primitives", () => {
+  it("dispatches a server-composed Button action to onAction with its context", async () => {
+    const onAction = vi.fn();
+    render(<CanvasSurfaces messages={personaButtonMessages} onAction={onAction} />);
+    fireEvent.click(await screen.findByRole("button", { name: "시니어" }));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction.mock.calls[0]?.[0]).toMatchObject({
+      name: "persona.select",
+      surfaceId: "card-1",
+      context: { personaId: "senior" },
+    });
+  });
+
+  it("reports CheckBox edits on watched paths and accepts shell-owned values back", async () => {
+    const onValueChange = vi.fn();
+    const watch = [{ surfaceId: "checklist-1", paths: ["/checked0"] }];
+    const { rerender } = render(
+      <CanvasSurfaces messages={checklistMessages} watch={watch} onValueChange={onValueChange} />,
+    );
+    const box = (await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    expect(onValueChange).toHaveBeenCalledWith({ surfaceId: "checklist-1", path: "/checked0", value: true });
+    expect(box.checked).toBe(true);
+
+    rerender(
+      <CanvasSurfaces
+        messages={checklistMessages}
+        watch={watch}
+        values={[{ surfaceId: "checklist-1", path: "/checked0", value: false }]}
+        onValueChange={onValueChange}
+      />,
+    );
+    expect(((await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement).checked).toBe(false);
+    // the shell-driven write must not echo back as a user edit
+    expect(onValueChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes emphasis on the card wrapper for styling", async () => {
+    const { container } = render(
+      <CanvasSurfaces messages={benefitCardMessages} layout={[{ cardId: "card-1", emphasis: "primary" }]} />,
+    );
+    // Text's markdown renderer resolves asynchronously; await it (as the other
+    // tests in this file do) so the update lands inside act() before asserting.
+    await screen.findByText("국가장학금");
+    expect(container.querySelector('[data-card-id="card-1"]')?.getAttribute("data-emphasis")).toBe("primary");
   });
 });
