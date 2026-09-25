@@ -38,9 +38,10 @@ export interface ManipulationCheckReport {
   /** Expanded candidate gained Checklist+SourceNotice and the pinned one gained ScoreBreakdown. */
   subCardsComposed: boolean;
   /**
-   * The manipulated visible order is grouped by candidate: PersonaSelector (if
-   * any) first, each candidate's cards contiguous in the fixed order, pinned
-   * groups before the others, DeadlineList (if any) last.
+   * Both compositions' visible order is grouped by candidate: PersonaSelector
+   * (if any) first, each candidate's cards contiguous in the fixed order,
+   * pinned groups before the others, DeadlineList (if any) last. The control
+   * composition has no pins yet; the manipulated one has the pinned entity.
    */
   groupedOrderPreserved: boolean;
 }
@@ -204,6 +205,7 @@ export async function runManipulationCheck(
       currentComposition: { cards: [] },
     });
     seq = control.nextSeq ?? seq;
+    const controlVisible = visibleCards(control);
     const controlCards = benefitCards(control);
     const controlOrder = controlCards.map((card) => card.entityId);
     if (controlCards.length < 3) {
@@ -396,7 +398,9 @@ export async function runManipulationCheck(
       has("Checklist", reordered.entityId) &&
       has("SourceNotice", reordered.entityId) &&
       has("ScoreBreakdown", pinned.entityId);
-    const groupedOrderPreserved = groupedOrderHolds(manipulatedVisible, new Set([pinned.entityId]));
+    const groupedOrderPreserved =
+      groupedOrderHolds(controlVisible, new Set()) &&
+      groupedOrderHolds(manipulatedVisible, new Set([pinned.entityId]));
 
     return {
       query: options.query,

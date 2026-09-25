@@ -597,4 +597,47 @@ describe("candidate groups", () => {
     const visible = out.spec.cards.map((card) => ({ componentType: card.componentType, entityId: card.entityRef.entityId }));
     expect(groupedOrderHolds(visible, new Set(["r"]))).toBe(true);
   });
+
+  it("keeps a pinned DeadlineList present but still last even though the provider led with it", () => {
+    // DeadlineList is not a candidate-scoped component (GROUP_RANK has no entry
+    // for it), so pinning it must guarantee presence without moving it out of
+    // the trailing position — rule 7's "DeadlineList last" holds even pinned.
+    const spec = composedOf(deadlines, benefit("p"), benefit("r"));
+    const current = {
+      cards: [
+        shellRow("deadlines", "DeadlineList", "upcoming-deadlines", { pinned: true }),
+        shellRow("card-p", "BenefitCard", "p"),
+        shellRow("card-r", "BenefitCard", "r"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    const expected = ["card-p", "card-r", "deadlines"];
+    expect(out.spec.order).toEqual(expected);
+    expect(out.spec.cards.map((card) => card.cardId)).toEqual(expected);
+
+    const visible = out.spec.cards.map((card) => ({ componentType: card.componentType, entityId: card.entityRef.entityId }));
+    expect(groupedOrderHolds(visible, new Set())).toBe(true);
+  });
+
+  it("restores a pinned DeadlineList the provider omitted entirely, placing it last", () => {
+    const spec = composedOf(benefit("p"), benefit("r"));
+    const current = {
+      cards: [
+        shellRow("deadlines", "DeadlineList", "upcoming-deadlines", { pinned: true }),
+        shellRow("card-p", "BenefitCard", "p"),
+        shellRow("card-r", "BenefitCard", "r"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    expect(out.spec.cards.map((card) => card.cardId)).toContain("deadlines");
+    const expected = ["card-p", "card-r", "deadlines"];
+    expect(out.spec.order).toEqual(expected);
+
+    const visible = out.spec.cards.map((card) => ({ componentType: card.componentType, entityId: card.entityRef.entityId }));
+    expect(groupedOrderHolds(visible, new Set())).toBe(true);
+  });
 });

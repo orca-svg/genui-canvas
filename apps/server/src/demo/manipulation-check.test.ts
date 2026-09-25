@@ -81,6 +81,35 @@ describe("runManipulationCheck (live gateway, rule-based)", () => {
     expect(report.hiddenRemoved).toBe(true);
     expect(report.subCardsComposed).toBe(true);
   }, 30000);
+
+  it("keeps the control composition's candidate groups whole for a provider that scrambles only the first turn", async () => {
+    await gateway.connect();
+    const ruleBased = new RuleBasedProvider();
+    // Non-compliant provider, but only on the control (first) turn — the
+    // manipulated turn's raw order is left untouched. traceSummary.turnCount
+    // is 1 while composing the control turn (one query.submit recorded so
+    // far) and 2 while composing the manipulated turn.
+    const scramblingControlOnly: LlmProvider = {
+      name: "scrambling-control-only",
+      async compose(request) {
+        const spec = (await ruleBased.compose(request)) as { cards: Array<{ cardId: string }> };
+        if (request.context.traceSummary.turnCount !== 1) return spec;
+        const cards = [...spec.cards].reverse();
+        return { ...spec, cards, order: cards.map((card) => card.cardId) };
+      },
+    };
+    const report = await runManipulationCheck(
+      { gateway, provider: scramblingControlOnly },
+      { query: "서울 대학생 지원", profile: { regionCode: "KR-11", studentStatus: "student" } },
+    );
+
+    // enforceManipulationInvariants groups every turn's visible order, not
+    // only a turn with a pin/hide/reorder, so the control composition comes
+    // back grouped even though this provider scattered its raw output — and
+    // groupedOrderPreserved now checks that control composition too (it used
+    // to check only the manipulated one).
+    expect(report.groupedOrderPreserved).toBe(true);
+  }, 30000);
 });
 
 describe("groupedOrderHolds", () => {
@@ -102,6 +131,18 @@ describe("groupedOrderHolds", () => {
         pinned,
       ),
     ).toBe(true);
+  });
+
+  it("rejects a scattered, ungrouped order such as a non-compliant provider might emit for a fresh (unpinned) control composition", () => {
+    // No pin exists yet on the control turn, so the flag checks it with an
+    // empty pinned set — confirm the predicate still catches a scattered order.
+    const scattered = [
+      card("BenefitCard", "a"),
+      card("BenefitCard", "b"),
+      card("ScoreBreakdown", "a"),
+      card("Checklist", "a"),
+    ];
+    expect(groupedOrderHolds(scattered, new Set())).toBe(false);
   });
 
   it("rejects a split group, a wrong in-group order, a buried pin, and a misplaced singleton", () => {

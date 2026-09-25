@@ -605,8 +605,10 @@ describe("server-side trace bookkeeping", () => {
     const frames = sseFrames(await turn.text());
     const status = frames.find((f) => f.kind === "status");
     const error = frames.find((f) => f.kind === "error") as { nextSeq: number; message: string };
-    // Every frame's data payload is wire-schema-validated (app.ts's serverEventData), not
-    // just shaped the way this test happens to expect.
+    // The frames were already shaped to match the wire schema (app.ts's
+    // serverEventData); this confirms that shape against ServerEventSchema
+    // rather than the way this test happens to expect them, not that the
+    // server runtime-validates every frame before sending it.
     expect(ServerEventSchema.safeParse(status).success).toBe(true);
     expect(ServerEventSchema.safeParse(error).success).toBe(true);
     expect(error.nextSeq).toBe(1);

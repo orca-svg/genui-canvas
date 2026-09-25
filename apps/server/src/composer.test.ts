@@ -258,7 +258,8 @@ describe("composeTurn semantic catalog hydration", () => {
     if (result.ok) {
       // The fake provider emits a non-compliant order (PersonaSelector and
       // DeadlineList out of place); enforceManipulationInvariants regroups
-      // every turn (R15), so the composed spec follows spec rules 6/7 instead.
+      // every turn (spec rules 6/7), so the composed spec follows those
+      // rules instead.
       expect(result.spec.cards.map((card) => card.componentType)).toEqual([
         "PersonaSelector",
         "BenefitCard",
