@@ -333,7 +333,7 @@ describe("hidden tail", () => {
   });
 });
 
-// --- candidate groups (spec rules 6/7, rulings R10/R11) ----------------------
+// --- candidate groups (spec rules 6/7) ----------------------
 
 const benefit = (id: string) => ({
   cardId: `card-${id}`,
