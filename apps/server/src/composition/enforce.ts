@@ -220,7 +220,7 @@ function groupedVisibleOrder(
     ...inProviderOrder.filter((card) => card.componentType === "PersonaSelector"),
     ...pinnedEntities.flatMap((entityId) => groups.get(entityId) ?? []),
     ...anchored.flatMap((entityId) => groups.get(entityId) ?? []),
-    ...unpinned.filter((entityId) => orphanEntities.has(entityId)).flatMap((entityId) => groups.get(entityId) ?? []),
+    ...[...orphanEntities].flatMap((entityId) => groups.get(entityId) ?? []),
   ];
   const placed = new Set(ordered.map((card) => card.cardId));
   const trailing = inProviderOrder.filter((card) => card.componentType === "DeadlineList");

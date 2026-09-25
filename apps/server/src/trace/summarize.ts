@@ -109,7 +109,9 @@ export function summarizeTrace(
       pinned: entry.pinned,
       hidden: entry.hidden,
       expandCount: entry.expandCount,
-      checkedItems: [...entry.checkedItems].sort((a, b) => a - b).slice(0, CHECKLIST_MAX_ITEMS),
+      // checklistIndex already bounds every admitted index to [0, CHECKLIST_MAX_ITEMS),
+      // so the Set can never hold more than CHECKLIST_MAX_ITEMS entries.
+      checkedItems: [...entry.checkedItems].sort((a, b) => a - b),
       ...(entry.lastAction ? { lastAction: entry.lastAction } : {}),
     }));
 

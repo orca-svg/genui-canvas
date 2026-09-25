@@ -16,6 +16,7 @@ import {
   UserQueryTextSchema,
   createInteractionEvent,
   type InteractionEvent,
+  type ServerEvent,
 } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
 import { GatewayCompatibilityError } from "./mcp/gateway-client.js";
@@ -42,6 +43,11 @@ const TurnBodySchema = z.object({
   currentComposition: CurrentCompositionSchema,
   query: UserQueryTextSchema.optional(),
 }).strict();
+
+/** Every SSE frame's `data:` payload is the wire-schema-validated JSON of a ServerEvent. */
+function serverEventData(event: ServerEvent): string {
+  return JSON.stringify(ServerEventSchema.parse(event));
+}
 
 /**
  * HTTP surface. /api/turn runs a composition point and streams the resulting
@@ -170,7 +176,7 @@ export function createApp(deps: AppDeps) {
     return streamSSE(c, async (stream) => {
       await stream.writeSSE({
         event: "status",
-        data: JSON.stringify({ kind: "status", message: "게이트웨이에서 후보를 검색하고 구성 중" }),
+        data: serverEventData({ kind: "status", message: "게이트웨이에서 후보를 검색하고 구성 중" }),
       });
       try {
         const result = await composeTurn(deps, turn);
@@ -194,13 +200,16 @@ export function createApp(deps: AppDeps) {
           if (intent.success) {
             await stream.writeSSE({
               event: "intent",
-              data: JSON.stringify(ServerEventSchema.parse({ kind: "intent", text: intent.data })),
+              data: serverEventData({ kind: "intent", text: intent.data }),
             });
           }
           const metadataByCardId = new Map(
             result.cardMetadata.map((metadata) => [metadata.cardId, metadata]),
           );
-          const compositionEvent = ServerEventSchema.parse({
+          // composer's A2uiMessage type is intentionally looser than the wire schema's
+          // (it is re-validated inside serverEventData); the cast only bridges the two
+          // static types and changes nothing at runtime.
+          const compositionEvent = {
             kind: "composition",
             compositionId,
             messages: result.messages,
@@ -211,18 +220,18 @@ export function createApp(deps: AppDeps) {
               ...metadataByCardId.get(card.cardId),
             })),
             nextSeq: session.seq,
-          });
-          await stream.writeSSE({ event: "composition", data: JSON.stringify(compositionEvent) });
+          } as unknown as ServerEvent;
+          await stream.writeSSE({ event: "composition", data: serverEventData(compositionEvent) });
         } else {
           await stream.writeSSE({
             event: "error",
-            data: JSON.stringify({ kind: "error", message: "구성을 검증하지 못했습니다", nextSeq: session.seq }),
+            data: serverEventData({ kind: "error", message: "구성을 검증하지 못했습니다", nextSeq: session.seq }),
           });
         }
       } catch (error) {
         await stream.writeSSE({
           event: "error",
-          data: JSON.stringify({
+          data: serverEventData({
             kind: "error",
             message:
               error instanceof GatewayCompatibilityError

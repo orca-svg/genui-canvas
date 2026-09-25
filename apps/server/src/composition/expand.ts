@@ -168,8 +168,8 @@ function benefitCardBody(
     status: String(assessment.status ?? "candidate"),
     statusLabel: recommendationStatusLabel(assessment.status),
     scoreLabel: relativeScoreLabel(score),
-    scoreValueText: `상대 관련도 ${Math.round(score * 100)}/100`,
-    scoreCaveatText: "자격 확률 아님",
+    scoreValueText: scoreText(score).value,
+    scoreCaveatText: scoreText(score).caveat,
     reasons,
     reasonsText: reasons.length > 0 ? `추천 근거: ${reasons.join(" · ")}` : "추천 근거: 제공되지 않음",
     missingInfo,
@@ -246,8 +246,8 @@ function scoreBreakdownBody(
     score,
     scoreLabel: relativeScoreLabel(score),
     scoreText: relativeScoreLabel(score),
-    scoreValueText: `상대 관련도 ${Math.round(score * 100)}/100`,
-    scoreCaveatText: "자격 확률 아님",
+    scoreValueText: scoreText(score).value,
+    scoreCaveatText: scoreText(score).caveat,
     items,
     rationale: card.rationale,
     rationaleText: `표시 이유: ${card.rationale}`,
@@ -611,8 +611,16 @@ function recommendationStatusLabel(status: unknown): string {
   }
 }
 
+/** The score caption pair shared by BenefitCard and ScoreBreakdown — kept as one
+ *  source so the trust-copy wording ("relative relevance, never an eligibility
+ *  probability") can't drift between the two call sites. */
+function scoreText(score: number): { value: string; caveat: string } {
+  return { value: `상대 관련도 ${Math.round(score * 100)}/100`, caveat: "자격 확률 아님" };
+}
+
 function relativeScoreLabel(score: number): string {
-  return `상대 관련도 ${Math.round(score * 100)}/100 · 자격 확률 아님`;
+  const { value, caveat } = scoreText(score);
+  return `${value} · ${caveat}`;
 }
 
 function preferredOfficialLink(
