@@ -159,8 +159,9 @@ const GROUP_RANK: Partial<Record<CatalogComponentType, number>> = {
  * any card of a group pins the group, in the order the pinned rows appear) →
  * the remaining groups with a visible BenefitCard (the user's BenefitCard row
  * order when they reordered, otherwise the provider position of the group's
- * first card) → sub-cards without a visible BenefitCard (grouped per entity,
- * entities by first appearance) → DeadlineList.
+ * BenefitCard, or of its first card for orphan groups) → sub-cards without a
+ * visible BenefitCard (grouped per entity, entities by first appearance) →
+ * DeadlineList.
  */
 function groupedVisibleOrder(
   cards: readonly CardSpec[],
@@ -213,6 +214,18 @@ function groupedVisibleOrder(
       (a, b) =>
         (userIndex.get(a) ?? Number.MAX_SAFE_INTEGER) - (userIndex.get(b) ?? Number.MAX_SAFE_INTEGER),
     );
+  } else {
+    // Anchor by the group's own BenefitCard position, not by whichever card of
+    // the group the provider happened to emit first — a stray leading sub-card
+    // must not drag its candidate ahead of the provider's score order (rule 7).
+    const benefitPosition = new Map<string, number>();
+    for (const entityId of anchored) {
+      const benefitCard = groups
+        .get(entityId)!
+        .find((card) => card.componentType === "BenefitCard")!;
+      benefitPosition.set(entityId, position.get(benefitCard.cardId) ?? 0);
+    }
+    anchored.sort((a, b) => benefitPosition.get(a)! - benefitPosition.get(b)!);
   }
   const orphanEntities = new Set(unpinned.filter((entityId) => !anchored.includes(entityId)));
 

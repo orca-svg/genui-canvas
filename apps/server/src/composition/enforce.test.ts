@@ -489,14 +489,14 @@ describe("candidate groups", () => {
 
     const out = enforceManipulationInvariants(spec, current, groupCache());
 
-    // pinned p first; remaining groups by the provider position of their first card (r before x)
+    // pinned p first; remaining groups by the provider position of their BenefitCard (x before r)
     expect(out.spec.order).toEqual([
       "card-p",
       "score-p",
+      "card-x",
       "card-r",
       "checklist-r",
       "source-r",
-      "card-x",
       "deadlines",
     ]);
   });
@@ -505,8 +505,23 @@ describe("candidate groups", () => {
     const spec = composedOf(score("a"), deadlines, benefit("b"), benefit("a"), checklist("b"));
     const out = enforceManipulationInvariants(spec, { cards: [] }, groupCache());
     expect(out.hiddenCardIds).toEqual([]);
-    expect(out.spec.order).toEqual(["card-a", "score-a", "card-b", "checklist-b", "deadlines"]);
+    expect(out.spec.order).toEqual(["card-b", "checklist-b", "card-a", "score-a", "deadlines"]);
     expect(out.spec.cards.map((card) => card.cardId)).toEqual(out.spec.order);
+  });
+
+  it("a stray leading sub-card does not move its candidate ahead of the provider's BenefitCard order", () => {
+    // Entity a's ScoreBreakdown is emitted before entity b's BenefitCard, but
+    // a's own BenefitCard comes after b's — the stray leading sub-card must
+    // not let a's group jump ahead of b's.
+    const spec = composedOf(score("a"), benefit("b"), benefit("a"));
+    const out = enforceManipulationInvariants(spec, { cards: [] }, groupCache());
+
+    const expected = ["card-b", "card-a", "score-a"];
+    expect(out.spec.order).toEqual(expected);
+    expect(out.spec.cards.map((card) => card.cardId)).toEqual(expected);
+
+    const visible = out.spec.cards.map((card) => ({ componentType: card.componentType, entityId: card.entityRef.entityId }));
+    expect(groupedOrderHolds(visible, new Set())).toBe(true);
   });
 
   it("keeps sub-cards without a visible BenefitCard after the groups, grouped per entity in the fixed in-group order", () => {
