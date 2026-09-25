@@ -49,6 +49,8 @@ function serverEventData(event: ServerEvent): string {
   return JSON.stringify(ServerEventSchema.parse(event));
 }
 
+type CompositionServerEvent = Extract<ServerEvent, { kind: "composition" }>;
+
 /**
  * HTTP surface. /api/turn runs a composition point and streams the resulting
  * A2UI messages over SSE; /api/events records fine-grained manipulations to the
@@ -206,13 +208,13 @@ export function createApp(deps: AppDeps) {
           const metadataByCardId = new Map(
             result.cardMetadata.map((metadata) => [metadata.cardId, metadata]),
           );
-          // composer's A2uiMessage type is intentionally looser than the wire schema's
-          // (it is re-validated inside serverEventData); the cast only bridges the two
-          // static types and changes nothing at runtime.
-          const compositionEvent = {
+          const compositionEvent: CompositionServerEvent = {
             kind: "composition",
             compositionId,
-            messages: result.messages,
+            // composer's A2uiMessage type ({version; [key: string]: unknown}) is looser than
+            // the wire schema's strict three-member union; only this field needs bridging —
+            // it is re-validated inside serverEventData, so nothing changes at runtime.
+            messages: result.messages as unknown as CompositionServerEvent["messages"],
             cards: result.spec.cards.map((card) => ({
               cardId: card.cardId,
               entityId: card.entityRef?.entityId,
@@ -220,7 +222,7 @@ export function createApp(deps: AppDeps) {
               ...metadataByCardId.get(card.cardId),
             })),
             nextSeq: session.seq,
-          } as unknown as ServerEvent;
+          };
           await stream.writeSSE({ event: "composition", data: serverEventData(compositionEvent) });
         } else {
           await stream.writeSSE({

@@ -602,36 +602,16 @@ describe("server-side trace bookkeeping", () => {
         currentComposition: { cards: [] },
       }),
     });
-    const error = sseFrames(await turn.text()).find((f) => f.kind === "error") as { nextSeq: number; message: string };
+    const frames = sseFrames(await turn.text());
+    const status = frames.find((f) => f.kind === "status");
+    const error = frames.find((f) => f.kind === "error") as { nextSeq: number; message: string };
+    // Every frame's data payload is wire-schema-validated (app.ts's serverEventData), not
+    // just shaped the way this test happens to expect.
+    expect(ServerEventSchema.safeParse(status).success).toBe(true);
+    expect(ServerEventSchema.safeParse(error).success).toBe(true);
     expect(error.nextSeq).toBe(1);
     expect(error.message).not.toContain("boom");
     expect(traceStore.read(sessionId).map((e) => e.type)).toEqual(["session.start"]);
-  });
-
-  it("emits status and error SSE frames that satisfy the wire ServerEvent schema, nextSeq included", async () => {
-    const throwingGateway = {
-      async searchBenefits() {
-        throw new Error("boom");
-      },
-    } as unknown as GatewayClient;
-    const local = createApp({ gateway: throwingGateway, provider: new RuleBasedProvider(), traceStore });
-    const sessionId = await issueSession(local);
-    const turn = await local.request("/api/turn", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        trigger: { type: "query.submit", text: "x" },
-        profile: {},
-        currentComposition: { cards: [] },
-      }),
-    });
-    const frames = sseFrames(await turn.text());
-    const status = frames.find((f) => f.kind === "status");
-    const error = frames.find((f) => f.kind === "error");
-    expect(ServerEventSchema.safeParse(status).success).toBe(true);
-    expect(ServerEventSchema.safeParse(error).success).toBe(true);
-    expect((error as { nextSeq?: number } | undefined)?.nextSeq).toBe(1);
   });
 
   it("still records tool.called and advances nextSeq when the provider output is rejected", async () => {

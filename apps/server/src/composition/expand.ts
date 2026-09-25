@@ -160,6 +160,9 @@ function benefitCardBody(
     : [];
   const sourceLink = preferredOfficialLink(detail.links, "source");
   const sourceUrl = sourceLink?.url;
+  // Renamed on destructure: this function's own `value` (the data-model record below)
+  // would otherwise collide with scoreCaption's `value` field.
+  const { value: scoreValue, caveat: scoreCaveat } = scoreCaption(score);
 
   const value: Record<string, unknown> = {
     title: String(benefit.title ?? ""),
@@ -168,8 +171,8 @@ function benefitCardBody(
     status: String(assessment.status ?? "candidate"),
     statusLabel: recommendationStatusLabel(assessment.status),
     scoreLabel: relativeScoreLabel(score),
-    scoreValueText: scoreText(score).value,
-    scoreCaveatText: scoreText(score).caveat,
+    scoreValueText: scoreValue,
+    scoreCaveatText: scoreCaveat,
     reasons,
     reasonsText: reasons.length > 0 ? `추천 근거: ${reasons.join(" · ")}` : "추천 근거: 제공되지 않음",
     missingInfo,
@@ -239,6 +242,9 @@ function scoreBreakdownBody(
       ? Math.min(MAX_DYNAMIC_ROWS, Math.max(1, Math.floor(card.props.maxItems)))
       : MAX_DYNAMIC_ROWS;
   const items = rawItems.slice(0, maxItems);
+  // Renamed on destructure: this function's own `value` (the data-model record below)
+  // would otherwise collide with scoreCaption's `value` field.
+  const { value: scoreValue, caveat: scoreCaveat } = scoreCaption(score);
 
   const value: Record<string, unknown> = {
     heading: "상대 관련도 구성",
@@ -246,8 +252,8 @@ function scoreBreakdownBody(
     score,
     scoreLabel: relativeScoreLabel(score),
     scoreText: relativeScoreLabel(score),
-    scoreValueText: scoreText(score).value,
-    scoreCaveatText: scoreText(score).caveat,
+    scoreValueText: scoreValue,
+    scoreCaveatText: scoreCaveat,
     items,
     rationale: card.rationale,
     rationaleText: `표시 이유: ${card.rationale}`,
@@ -613,13 +619,14 @@ function recommendationStatusLabel(status: unknown): string {
 
 /** The score caption pair shared by BenefitCard and ScoreBreakdown — kept as one
  *  source so the trust-copy wording ("relative relevance, never an eligibility
- *  probability") can't drift between the two call sites. */
-function scoreText(score: number): { value: string; caveat: string } {
+ *  probability") can't drift between the two call sites. Named distinctly from the
+ *  pre-existing `scoreText:` data-model key in scoreBreakdownBody's value record. */
+function scoreCaption(score: number): { value: string; caveat: string } {
   return { value: `상대 관련도 ${Math.round(score * 100)}/100`, caveat: "자격 확률 아님" };
 }
 
 function relativeScoreLabel(score: number): string {
-  const { value, caveat } = scoreText(score);
+  const { value, caveat } = scoreCaption(score);
   return `${value} · ${caveat}`;
 }
 
