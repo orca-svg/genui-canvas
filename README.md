@@ -169,10 +169,11 @@ It fails unless the pinned card moves first, the hidden card leaves the
 visible order, the order changes, the trace closes the loop, and the second
 composition contains `Checklist` and `SourceNotice` for the expanded
 candidate and `ScoreBreakdown` for the pinned one (`subCardsComposed`), laid
-out by candidate group: each candidate's cards stay together in the fixed
-`BenefitCard → ScoreBreakdown → Checklist → SourceNotice` order, pinned groups
-come first and `DeadlineList` last (`groupedOrderPreserved`). To investigate a
-locally configured model separately (not a CI/reproduction gate):
+out by candidate group on every composition, not only this second one: each
+candidate's cards stay together in the fixed `BenefitCard → ScoreBreakdown →
+Checklist → SourceNotice` order, pinned groups come first and `DeadlineList`
+last even when pinned (`groupedOrderPreserved`). To investigate a locally
+configured model separately (not a CI/reproduction gate):
 
 ```bash
 pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
@@ -182,11 +183,12 @@ pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
 
 - Session IDs are server-issued UUIDs; path traversal, unknown sessions,
   sequence gaps, and different duplicate events are rejected.
-- An exact retry of the client's most recent accepted event is idempotent,
-  supporting response-loss recovery without duplicate trace rows. If a turn's
-  response is lost after the server recorded `tool.called`, the client's next
-  event gets a sequence-conflict reply carrying the server's `nextSeq`; the
-  client rebuilds that event with it and retries once.
+- An exact retry of a client event is idempotent only while that event is
+  still the session's latest row, supporting response-loss recovery without
+  duplicate trace rows. A turn's `tool.called` row ends that window: once it
+  lands, the client's next event gets a sequence-conflict reply carrying the
+  server's `nextSeq`, and the client rebuilds that event with it and retries
+  once.
 - The server records `session.start` and one `tool.called` ledger per turn
   (tool name, call and failure counts only) in the same trace, and returns
   `nextSeq` so the client cannot skip or reuse a sequence number.

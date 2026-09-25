@@ -62,10 +62,11 @@ silently treated as the general AAAI technical track.
 
 1. Direct manipulations update the shell immediately and do not call the model.
 2. A server-issued UUID session and monotonic event sequence back every trace;
-   an exact retry of the client's most recent event is idempotent, different
-   duplicate/gap events fail, and a sequence-conflict reply carries the
-   server's `nextSeq`, so a client that lost a turn's response re-synchronises
-   and retries once.
+   an exact retry is idempotent only while the retried event is still the
+   session's latest row (a turn's `tool.called` row ends that window),
+   different duplicate/gap events fail, and a sequence-conflict reply carries
+   the server's `nextSeq`, so a client that lost a turn's response
+   re-synchronises and retries once.
 3. `pnpm demo:replay` passes through Hono HTTP session/event/turn endpoints,
    persists eleven events (including the `session.start` and `tool.called`
    bookkeeping rows), verifies the second provider request received the
