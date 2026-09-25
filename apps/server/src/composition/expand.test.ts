@@ -1,7 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { A2uiMessageSchema, BASIC_CATALOG_ID } from "@genui-canvas/contracts";
+import { A2uiMessageSchema, BASIC_CATALOG_ID, CompositionSpecSchema } from "@genui-canvas/contracts";
 import { ToolResultCache } from "./tool-cache.js";
 import { expandComposition } from "./expand.js";
+
+type Rec = Record<string, unknown>;
+const rec = (value: unknown): Rec =>
+  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Rec) : {};
+
+/** Pull one surface's components, body children, and data model out of a message batch. */
+function surfaceParts(messages: unknown[], surfaceId: string) {
+  const update = messages.find((m) => rec(rec(m).updateComponents).surfaceId === surfaceId);
+  const model = messages.find((m) => rec(rec(m).updateDataModel).surfaceId === surfaceId);
+  const components = (rec(rec(update).updateComponents).components as Rec[] | undefined) ?? [];
+  const byId = new Map(components.map((c) => [String(c.id), c]));
+  return {
+    components,
+    byId,
+    body: (rec(byId.get("body")).children as string[] | undefined) ?? [],
+    value: rec(rec(rec(model).updateDataModel).value),
+  };
+}
 
 const summary = {
   id: "national-scholarship",
@@ -212,13 +230,9 @@ describe("expandComposition — semantic catalog components", () => {
 
     const messages = expandComposition(spec, cache);
     expect(messages.every((message) => A2uiMessageSchema.safeParse(message).success)).toBe(true);
-    const componentMessage = messages.find((message) => "updateComponents" in message) as {
-      updateComponents: { components: Array<{ component: string; children?: string[] }> };
-    };
-    const root = componentMessage.updateComponents.components.find(
-      (component) => component.component === "Column",
-    );
-    expect(root?.children?.length).toBeLessThanOrEqual(100);
+    const { components, body } = surfaceParts(messages, "persona-card");
+    expect(body.length).toBeLessThanOrEqual(100);
+    expect(components.length).toBeLessThanOrEqual(200);
   });
 
   it("renders ScoreBreakdown from retrieved recommendation dimensions instead of a generic summary", () => {
@@ -437,5 +451,266 @@ describe("expandComposition — semantic catalog components", () => {
     expect(value.sourceText).toContain("공식 출처");
     expect(value.sourceHealthText).toContain("fixture-benefits:ok");
     expect(value.safetyNotice).toMatch(/공식 주소|직접/);
+  });
+});
+
+describe("expandComposition — interactive catalog", () => {
+  const sixCardSpec = () =>
+    CompositionSpecSchema.parse({
+      intentSummary: "six",
+      cards: [
+        { cardId: "card-national-scholarship", componentType: "BenefitCard", entityRef: { toolResult: "searchBenefits", entityId: "national-scholarship" }, props: {}, rationale: "r" },
+        { cardId: "score-national-scholarship", componentType: "ScoreBreakdown", entityRef: { toolResult: "searchBenefits", entityId: "national-scholarship" }, props: {}, rationale: "r" },
+        { cardId: "checklist-national-scholarship", componentType: "Checklist", entityRef: { toolResult: "buildChecklist", entityId: "national-scholarship" }, props: {}, rationale: "r" },
+        { cardId: "source-national-scholarship", componentType: "SourceNotice", entityRef: { toolResult: "getBenefitDetail", entityId: "national-scholarship" }, props: {}, rationale: "r" },
+        { cardId: "deadlines", componentType: "DeadlineList", entityRef: { toolResult: "getUpcomingDeadlines", entityId: "upcoming-deadlines" }, props: {}, rationale: "r" },
+        { cardId: "personas", componentType: "PersonaSelector", entityRef: { toolResult: "listPersonas", entityId: "personas" }, props: {}, rationale: "r" },
+      ],
+      order: ["card-national-scholarship", "score-national-scholarship", "checklist-national-scholarship", "source-national-scholarship", "deadlines", "personas"],
+    });
+
+  const fullCache = () => {
+    const cache = cacheWith(summary);
+    cache.put("getBenefitDetail", "national-scholarship", detailResponse());
+    cache.put("buildChecklist", "national-scholarship", {
+      benefitId: "national-scholarship",
+      items: [
+        { id: "student-status", label: "재학증명서", required: true, source: "학교" },
+        { id: "household-consent", label: "가구원 동의", required: false },
+      ],
+      caveats: ["공식 공고 확인"],
+    });
+    cache.put("getUpcomingDeadlines", "upcoming-deadlines", {
+      profile: {},
+      results: [{ ...summary, applicationDeadline: "2030-07-15T09:00:00.000Z" }],
+      generatedAt: "2026-07-10T00:00:00.000Z",
+    });
+    cache.put("listPersonas", "personas", {
+      personas: [
+        { id: "general", description: "일반", weights: { region: 1 } },
+        { id: "university_student", description: "대학생 우선", weights: { student: 3, region: 1 } },
+        { id: "not-a-persona", description: "무시됨", weights: {} },
+      ],
+    });
+    return cache;
+  };
+
+  it("wraps every card in a Card root whose single child is the body Column", () => {
+    const messages = expandComposition(sixCardSpec(), fullCache());
+    for (const surfaceId of sixCardSpec().order) {
+      const { byId } = surfaceParts(messages, surfaceId);
+      expect(byId.get("root")).toMatchObject({ component: "Card", child: "body" });
+      expect(byId.get("body")).toMatchObject({ component: "Column" });
+    }
+  });
+
+  it("stays inside the wire contract for all six components", () => {
+    const messages = expandComposition(sixCardSpec(), fullCache(), {
+      checkedItemsByEntity: { "national-scholarship": [1] },
+      activePersonaId: "university_student",
+    });
+    for (const message of messages) {
+      const parsed = A2uiMessageSchema.safeParse(message);
+      expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues)).toBe(true);
+    }
+  });
+
+  it("renders Checklist rows as CheckBoxes bound to per-row flags prefilled from the trace", () => {
+    const messages = expandComposition(sixCardSpec(), fullCache(), {
+      checkedItemsByEntity: { "national-scholarship": [1] },
+    });
+    const { byId, body, value } = surfaceParts(messages, "checklist-national-scholarship");
+    expect(body).toContain("check-0");
+    expect(byId.get("check-0")).toEqual({
+      id: "check-0",
+      component: "CheckBox",
+      label: { path: "/item0Text" },
+      value: { path: "/checked0" },
+    });
+    expect(value.item0Text).toBe("[필수] 재학증명서 · 출처: 학교");
+    expect(value.checked0).toBe(false);
+    expect(value.checked1).toBe(true);
+    expect(value.progressText).toBe("필수 1개 · 전체 2개 · 체크 1개");
+    expect(JSON.stringify(value)).not.toContain("☐");
+  });
+
+  it("renders one persona.select Button per valid gateway persona and marks the active one primary", () => {
+    const messages = expandComposition(sixCardSpec(), fullCache(), {
+      checkedItemsByEntity: {},
+      activePersonaId: "university_student",
+    });
+    const { byId, body, value } = surfaceParts(messages, "personas");
+    expect(body.filter((id) => id.startsWith("persona-") && !id.endsWith("-desc"))).toEqual(["persona-0", "persona-1"]);
+    expect(byId.get("persona-1")).toMatchObject({
+      component: "Button",
+      variant: "primary",
+      child: "persona-1-label",
+      action: { event: { name: "persona.select", context: { personaId: "university_student" } } },
+    });
+    expect(byId.get("persona-0")).toMatchObject({ component: "Button", variant: "default" });
+    expect(value.persona1Label).toBe("대학생 · 현재 관점");
+    expect(value.persona0Label).toBe("일반");
+    expect(byId.has("persona-2")).toBe(false);
+  });
+
+  it("puts the relative score in a Row with the not-a-probability caveat", () => {
+    const messages = expandComposition(specFor("national-scholarship"), fullCache());
+    const { byId, value } = surfaceParts(messages, "c1");
+    expect(byId.get("scoreRow")).toMatchObject({ component: "Row", children: ["scoreValue", "scoreCaveat"] });
+    expect(value.scoreValueText).toBe("상대 관련도 96/100");
+    expect(value.scoreCaveatText).toBe("자격 확률 아님");
+  });
+
+  it("keeps a body under 100 children even with the maximum checklist rows", () => {
+    const cache = fullCache();
+    cache.put("buildChecklist", "national-scholarship", {
+      benefitId: "national-scholarship",
+      items: Array.from({ length: 300 }, (_, i) => ({ id: `i${i}`, label: `항목 ${i}`, required: false })),
+      caveats: [],
+    });
+    const messages = expandComposition(sixCardSpec(), cache);
+    const { body, components } = surfaceParts(messages, "checklist-national-scholarship");
+    expect(body.length).toBeLessThanOrEqual(100);
+    expect(components.length).toBeLessThanOrEqual(200);
+    expect(A2uiMessageSchema.safeParse(messages[7]).success).toBe(true);
+  });
+
+  it("omits the score row and breakdown children from the BenefitCard body when showScore is false", () => {
+    const spec = {
+      intentSummary: "점수 숨김",
+      cards: [
+        {
+          cardId: "c1",
+          componentType: "BenefitCard" as const,
+          entityRef: { toolResult: "searchBenefits" as const, entityId: summary.id },
+          props: { showScore: false },
+          rationale: "r",
+        },
+      ],
+      order: ["c1"],
+    };
+
+    const messages = expandComposition(spec, cacheWith(summary));
+    const { body, byId } = surfaceParts(messages, "c1");
+
+    expect(body).not.toContain("scoreRow");
+    expect(body).not.toContain("scoreBreakdown");
+    expect(byId.has("scoreRow")).toBe(false);
+    expect(byId.has("scoreValue")).toBe(false);
+  });
+
+  it("renders an empty PersonaSelector body when every persona id is invalid", () => {
+    const cache = new ToolResultCache();
+    cache.put("listPersonas", "personas", {
+      personas: [
+        { id: "not-a-persona", description: "무시됨", weights: {} },
+        { id: "also-invalid", description: "무시됨", weights: {} },
+      ],
+    });
+    const spec = {
+      intentSummary: "무효 관점",
+      cards: [
+        {
+          cardId: "persona-card",
+          componentType: "PersonaSelector" as const,
+          entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["persona-card"],
+    };
+
+    const messages = expandComposition(spec, cache);
+    const { body, value } = surfaceParts(messages, "persona-card");
+
+    expect(body.filter((id) => id.startsWith("persona-"))).toEqual([]);
+    expect(value.personas).toEqual([]);
+  });
+
+  it("omits the current-view marker on every persona label when activePersonaId is undefined", () => {
+    const cache = new ToolResultCache();
+    cache.put("listPersonas", "personas", {
+      personas: [{ id: "general", description: "일반", weights: {} }],
+    });
+    const spec = {
+      intentSummary: "관점 미선택",
+      cards: [
+        {
+          cardId: "persona-card",
+          componentType: "PersonaSelector" as const,
+          entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["persona-card"],
+    };
+
+    const messages = expandComposition(spec, cache); // no context => activePersonaId is undefined
+    const { value } = surfaceParts(messages, "persona-card");
+
+    expect(value.activePersonaId).toBe("");
+    expect(value.persona0Label).toBe("일반");
+    expect(value.persona0Label).not.toContain("현재 관점");
+  });
+
+  it("keeps the CheckBox row count bounded by the item count even with an out-of-range checked index", () => {
+    const cache = new ToolResultCache();
+    cache.put("buildChecklist", summary.id, {
+      benefitId: summary.id,
+      items: [
+        { id: "a", label: "항목 1", required: true },
+        { id: "b", label: "항목 2", required: false },
+      ],
+      caveats: [],
+    });
+    const spec = {
+      intentSummary: "범위 밖 체크",
+      cards: [
+        {
+          cardId: "checklist-card",
+          componentType: "Checklist" as const,
+          entityRef: { toolResult: "buildChecklist" as const, entityId: summary.id },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["checklist-card"],
+    };
+
+    const messages = expandComposition(spec, cache, {
+      checkedItemsByEntity: { [summary.id]: [0, 1, 55] },
+    });
+    const { body } = surfaceParts(messages, "checklist-card");
+
+    expect(body.filter((id) => id.startsWith("check-"))).toEqual(["check-0", "check-1"]);
+  });
+
+  it("caps PersonaSelector rows at 40 valid personas", () => {
+    const cache = new ToolResultCache();
+    cache.put("listPersonas", "personas", {
+      personas: Array.from({ length: 50 }, () => ({ id: "general", description: "설명", weights: {} })),
+    });
+    const spec = {
+      intentSummary: "40행 캡",
+      cards: [
+        {
+          cardId: "persona-card",
+          componentType: "PersonaSelector" as const,
+          entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["persona-card"],
+    };
+
+    const messages = expandComposition(spec, cache);
+    const { body, value } = surfaceParts(messages, "persona-card");
+    const buttonIds = body.filter((id) => id.startsWith("persona-") && !id.endsWith("-desc"));
+
+    expect(buttonIds).toHaveLength(40);
+    expect((value.personas as unknown[]).length).toBe(40);
   });
 });

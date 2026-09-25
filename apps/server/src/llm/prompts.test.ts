@@ -56,10 +56,10 @@ describe("composition prompts", () => {
           entityEngagement: [
             {
               entityId: "benefit-1",
-              title: hostileText,
               pinned: true,
               hidden: false,
               expandCount: 1,
+              checkedItems: [],
             },
           ],
           recentEvents: [],
@@ -72,5 +72,26 @@ describe("composition prompts", () => {
     expect(prompt).not.toContain("evil.example");
     expect(prompt).toContain("Request kind: query.submit");
     expect(prompt).toContain("entityId=benefit-1");
+  });
+
+  it("projects checked-row counts and the sub-card guidance, never row labels", () => {
+    const prompt = buildComposePrompt({
+      context: {
+        trigger: { type: "query.submit", text: "비밀 질의" },
+        currentComposition: { cards: [] },
+        traceSummary: {
+          entityEngagement: [{ entityId: "a", pinned: false, hidden: false, expandCount: 0, checkedItems: [0, 4] }],
+          recentEvents: [],
+          turnCount: 1,
+        },
+        profile: {},
+      },
+      candidates: [],
+      resources: [],
+    });
+    expect(prompt).toContain("checked=2");
+    expect(prompt).not.toContain("비밀 질의");
+    expect(SYSTEM_PROMPT).toContain("ScoreBreakdown for pinned");
+    expect(SYSTEM_PROMPT).toContain("PersonaSelector only");
   });
 });

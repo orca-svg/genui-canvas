@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { CanvasSurfaces, type A2uiMessages } from "@genui-canvas/renderer";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  CanvasSurfaces,
+  type A2uiMessages,
+  type CanvasActionEvent,
+  type CanvasValueChange,
+} from "@genui-canvas/renderer";
 import {
   createShellState,
   shellReducer,
@@ -12,8 +17,19 @@ import {
   deriveCompositionRejectedEvent,
   deriveInteractionEvent,
 } from "./state/interaction-log.js";
-import type { CatalogComponentType, InteractionEvent } from "@genui-canvas/contracts";
-import { createSession, postEvent, postTurn, type TurnBody } from "./api/client.js";
+import {
+  CanvasActionSchema,
+  type CompositionCard,
+  type InteractionEvent,
+} from "@genui-canvas/contracts";
+import {
+  SequenceConflictError,
+  createSession,
+  postEvent,
+  postTurn,
+  type SessionHandle,
+  type TurnBody,
+} from "./api/client.js";
 import { CardFrame } from "./components/CardFrame.js";
 
 interface Scenario {
@@ -71,6 +87,10 @@ function inverseAction(entry: HistoryEntry): ShellAction {
         cardId: action.cardId,
         toIndex: Math.max(0, before.cards.findIndex((card) => card.cardId === action.cardId)),
       };
+    case "checklist.check":
+      return { type: "checklist.uncheck", cardId: action.cardId, itemIndex: action.itemIndex };
+    case "checklist.uncheck":
+      return { type: "checklist.check", cardId: action.cardId, itemIndex: action.itemIndex };
   }
 }
 
@@ -84,7 +104,8 @@ function sameShell(left: ShellState, right: ShellState): boolean {
         card.cardId === other.cardId &&
         card.pinned === other.pinned &&
         card.hidden === other.hidden &&
-        card.expanded === other.expanded
+        card.expanded === other.expanded &&
+        card.checkedItems.join(",") === other.checkedItems.join(",")
       );
     })
   );
@@ -121,19 +142,13 @@ function toCurrentComposition(shell: ShellState): TurnBody["currentComposition"]
   };
 }
 
-/** Rebuild shell from a new composition, carrying over the user's flags. */
-function mergeShell(
-  prev: ShellState,
-  compositionId: string,
-  cards: Array<{
-    cardId: string;
-    entityId?: string;
-    componentType: CatalogComponentType;
-    title?: string;
-    sourceUrl?: string;
-    sourceCheckedAt?: string;
-  }>,
-): ShellState {
+/**
+ * Rebuild shell from a new composition, carrying over the user's flags. A row
+ * the shell already had keeps its local ticks; a row new to the shell starts
+ * from the server's trace-derived ticks, which the canvas data model already
+ * shows — starting it empty would write `false` over them.
+ */
+function mergeShell(prev: ShellState, compositionId: string, cards: CompositionCard[]): ShellState {
   const next = createShellState(compositionId, cards);
   const semanticFlags = new Map<string, ShellState["cards"][number]>();
   const idFlags = new Map(prev.cards.map((card) => [card.cardId, card]));
@@ -145,9 +160,23 @@ function mergeShell(
   return {
     ...next,
     cards: next.cards.map((c) => {
-      const semanticKey = c.entityId ? `${c.componentType}::${c.entityId}` : undefined;
-      const old = (semanticKey ? semanticFlags.get(semanticKey) : undefined) ?? idFlags.get(c.cardId);
-      return old ? { ...c, pinned: old.pinned, hidden: old.hidden, expanded: old.expanded } : c;
+      // A card with an entityId merges by that semantic key only: the
+      // provider can reuse a positional cardId for a different entity
+      // between turns, and falling back to the cardId here would hand that
+      // unrelated entity's pinned/hidden/expanded/checkedItems to it. The
+      // cardId fallback exists only for cards with no entityId to key on.
+      const old = c.entityId
+        ? semanticFlags.get(`${c.componentType}::${c.entityId}`)
+        : idFlags.get(c.cardId);
+      return old
+        ? {
+            ...c,
+            pinned: old.pinned,
+            hidden: c.hidden || old.hidden,
+            expanded: old.expanded,
+            checkedItems: old.checkedItems,
+          }
+        : c; // new to the shell: keeps the server's checkedItems from createShellState
     }),
   };
 }
@@ -163,10 +192,18 @@ export function App() {
   // Manipulations applied since the last composition — the trace the next
   // composition point will fold in.
   const [dirty, setDirty] = useState(false);
+  // Bumped whenever a checklist edit is ignored (busy/no session): the
+  // renderer already wrote the toggled value into its data model before we
+  // could reject it, and nothing else re-renders `App` to correct it — this
+  // forces the `values` memo to produce a fresh array so the renderer's
+  // values-push effect re-syncs the checkbox to the shell's actual state.
+  const [ignoredEditRevision, setIgnoredEditRevision] = useState(0);
   const scenarioRef = useRef<Scenario>(SCENARIOS[0]!);
   const seqRef = useRef(0);
   const traceQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const sessionRequestRef = useRef<Promise<string> | null>(null);
+  const sessionRequestRef = useRef<Promise<SessionHandle> | null>(null);
+  const shellRef = useRef<ShellState>(shell);
+  shellRef.current = shell;
   const compositionBaselineRef = useRef<ShellState>(shell);
   const pastRef = useRef<HistoryEntry[]>([]);
   const futureRef = useRef<HistoryEntry[]>([]);
@@ -175,19 +212,60 @@ export function App() {
     canRedo: false,
   });
 
+  // The one writer for shell state: keeps `shellRef` current at the moment of
+  // the write itself, not only at the render-time assignment above (which
+  // only runs on the *next* render). Every place that changes the shell — a
+  // composed turn landing, a manipulation, an undo, a redo — commits through
+  // here so a same-tick reader (e.g. `selectScenario`/`submitQuery` reading
+  // `shellRef.current`) always sees the latest shell.
+  function commitShell(next: ShellState) {
+    shellRef.current = next;
+    setShell(next);
+  }
+
   // The canvas follows the shell instantly: shell order (pinned first), hidden
   // cards dropped, expanded flag passed through — no server round-trip.
   const layout = shell.cards
     .filter((c) => !c.hidden)
-    .map((c) => ({ cardId: c.cardId, expanded: c.expanded }));
+    .map((c) => ({ cardId: c.cardId, expanded: c.expanded, emphasis: c.emphasis }));
+  const checklistCards = useMemo(
+    () => shell.cards.filter((c) => c.componentType === "Checklist" && typeof c.itemCount === "number"),
+    [shell],
+  );
+  const watch = useMemo(
+    () =>
+      checklistCards.map((c) => ({
+        surfaceId: c.cardId,
+        paths: Array.from({ length: c.itemCount ?? 0 }, (_, i) => `/checked${i}`),
+      })),
+    [checklistCards],
+  );
+  // `busy` and `ignoredEditRevision` are included so a fresh array is
+  // produced (even when the checked set itself hasn't changed) whenever a
+  // turn starts/ends or a checklist edit is ignored — that identity change
+  // re-runs the renderer's values-push effect, which is what makes a tick
+  // ignored by `handleCanvasValue` while busy visibly revert.
+  const values = useMemo(
+    () =>
+      checklistCards.flatMap((c) =>
+        Array.from({ length: c.itemCount ?? 0 }, (_, i) => ({
+          surfaceId: c.cardId,
+          path: `/checked${i}`,
+          value: c.checkedItems.includes(i),
+        })),
+      ),
+    [checklistCards, busy, ignoredEditRevision],
+  );
 
   useEffect(() => {
     let active = true;
     const request = sessionRequestRef.current ?? createSession();
     sessionRequestRef.current = request;
     request
-      .then((id) => {
-        if (active) setSessionId(id);
+      .then((handle) => {
+        if (!active) return;
+        seqRef.current = handle.nextSeq;
+        setSessionId(handle.sessionId);
       })
       .catch(() => {
         if (sessionRequestRef.current === request) sessionRequestRef.current = null;
@@ -202,8 +280,17 @@ export function App() {
     build: (seq: number) => Parameters<typeof postEvent>[0],
   ): Promise<InteractionEvent> {
     const task = traceQueueRef.current.then(async () => {
-      const event = build(seqRef.current);
-      await postEvent(event);
+      let event = build(seqRef.current);
+      try {
+        await postEvent(event);
+      } catch (error) {
+        if (!(error instanceof SequenceConflictError)) throw error;
+        // A server row took this number (e.g. tool.called for a turn whose
+        // response was lost). Adopt the server's sequence and resend once.
+        seqRef.current = error.nextSeq;
+        event = build(seqRef.current);
+        await postEvent(event);
+      }
       seqRef.current += 1;
       return event;
     });
@@ -237,18 +324,30 @@ export function App() {
       });
       const composition = events.find((e) => e.kind === "composition");
       const error = events.find((e) => e.kind === "error");
+      const terminal = composition ?? error;
+      if (terminal && typeof terminal.nextSeq === "number") seqRef.current = terminal.nextSeq;
+      const intentEvent = events.find((e) => e.kind === "intent");
+      const hadHistory = pastRef.current.length > 0 || futureRef.current.length > 0;
       if (composition && composition.kind === "composition") {
         const nextShell = mergeShell(current, composition.compositionId, composition.cards);
         setMessages(composition.messages as unknown as A2uiMessages);
-        setShell(nextShell);
+        commitShell(nextShell);
         compositionBaselineRef.current = nextShell;
         setDirty(false);
         clearHistory();
-        setIntent(
-          composition.cards.length > 0
-            ? `${composition.cards.length}개 카드를 구성했습니다.`
-            : "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요.",
-        );
+        // The fallback sentence describes what the user will actually see, so
+        // it counts visible cards only — the hidden tail (cards the server
+        // ships but marks `hidden: true`) doesn't belong in "N개 카드".
+        const visibleCardCount = composition.cards.filter((c) => c.hidden !== true).length;
+        const summary =
+          intentEvent && intentEvent.kind === "intent"
+            ? intentEvent.text
+            : composition.cards.length === 0
+              ? "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요."
+              : visibleCardCount > 0
+                ? `${visibleCardCount}개 카드를 구성했습니다.`
+                : "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.";
+        setIntent(hadHistory ? `${summary} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : summary);
         try {
           await enqueueTrace((seq) =>
             deriveCompositionAppliedEvent(nextShell, {
@@ -302,11 +401,11 @@ export function App() {
     scenarioRef.current = scenario;
     setQuery(scenario.query);
     if (typeof scenario.profile.persona === "string") setPersona(scenario.profile.persona);
-    void runTurn(scenario, shell);
+    void runTurn(scenario, shellRef.current);
   }
 
-  function switchPersona(event: ChangeEvent<HTMLSelectElement>) {
-    const personaId = event.target.value;
+  function applyPersona(personaId: string) {
+    if (busy || !sessionId) return;
     setPersona(personaId);
     const draftQuery = query.trim();
     const queryChanged = draftQuery.length > 0 && draftQuery !== scenarioRef.current.query;
@@ -318,7 +417,52 @@ export function App() {
         : { ...scenarioRef.current.profile, persona: personaId },
     };
     scenarioRef.current = next;
-    void runTurn(next, shell, { type: "persona.switch", personaId });
+    void runTurn(next, shellRef.current, { type: "persona.switch", personaId });
+  }
+
+  function switchPersona(event: ChangeEvent<HTMLSelectElement>) {
+    applyPersona(event.target.value);
+  }
+
+  // A server-composed Button reaches the shell here. It is re-validated against
+  // the canvas action contract and mapped onto the same composition point the
+  // sidebar control uses — never executed as-is.
+  function handleCanvasAction(action: CanvasActionEvent) {
+    // While a turn is in flight, every canvas action is ignored — including
+    // an invalid one, which would otherwise overwrite the busy status text
+    // with "알 수 없는 카드 동작은 무시했습니다." (`applyPersona` already guards
+    // the valid case on its own, which is why a *valid* composed action
+    // while busy is a no-op even without this line — see the "ignores a
+    // composed persona button while a turn is busy" test's comment).
+    if (busy) return;
+    const parsed = CanvasActionSchema.safeParse({ name: action.name, context: action.context });
+    if (!parsed.success) {
+      setIntent("알 수 없는 카드 동작은 무시했습니다.");
+      return;
+    }
+    if (parsed.data.name === "persona.select") applyPersona(parsed.data.context.personaId);
+  }
+
+  // A CheckBox edit reaches the shell here; ignore echoes of shell-driven writes.
+  function handleCanvasValue(change: CanvasValueChange) {
+    if (busy || !sessionId) {
+      // The renderer already wrote the toggled value into its data model;
+      // force a fresh `values` array so its push effect writes the shell's
+      // real (unchanged) value back and the checkbox visibly reverts.
+      setIgnoredEditRevision((revision) => revision + 1);
+      return;
+    }
+    const match = /^\/checked(\d{1,2})$/.exec(change.path);
+    if (!match || typeof change.value !== "boolean") return;
+    const itemIndex = Number(match[1]);
+    const card = shellRef.current.cards.find((c) => c.cardId === change.surfaceId);
+    if (!card || card.componentType !== "Checklist") return;
+    if (card.checkedItems.includes(itemIndex) === change.value) return;
+    manipulate({
+      type: change.value ? "checklist.check" : "checklist.uncheck",
+      cardId: card.cardId,
+      itemIndex,
+    });
   }
 
   function submitQuery(event: FormEvent<HTMLFormElement>) {
@@ -337,7 +481,7 @@ export function App() {
       profile: { persona },
     };
     scenarioRef.current = next;
-    void runTurn(next, shell);
+    void runTurn(next, shellRef.current);
   }
 
   // Fine-grained manipulation: applies instantly in the shell (the canvas
@@ -345,15 +489,24 @@ export function App() {
   // re-compose — that is reserved for composition points, so scroll position
   // and focus are preserved.
   function manipulate(action: ShellAction) {
-    const before = shell;
+    const before = shellRef.current;
     const after = shellReducer(before, action);
     if (sameShell(before, after)) return;
     pastRef.current = [...pastRef.current.slice(-49), { action, before, after }];
     futureRef.current = [];
     syncHistoryAvailability();
-    setShell(after);
+    // Two manipulations can dispatch within the same JS tick (before React
+    // flushes the first shell update), so `shellRef.current` must reflect
+    // `after` right away — the render-time assignment above runs too late
+    // for the second manipulation to see it as `before`. `commitShell` is
+    // the one writer that keeps the ref and the state in sync.
+    commitShell(after);
     setDirty(!sameShell(after, compositionBaselineRef.current));
-    setIntent("조작이 즉시 반영됐어요 · ‘조작 반영해 재구성’으로 추천을 갱신할 수 있어요.");
+    setIntent(
+      action.type.startsWith("checklist.")
+        ? "준비 메모를 기록했어요 · 이 기기의 체크 상태이며 신청 상태가 아닙니다."
+        : "조작이 즉시 반영됐어요 · ‘조작 반영해 재구성’으로 추천을 갱신할 수 있어요.",
+    );
     if (sessionId) {
       void enqueueTrace((seq) =>
         deriveInteractionEvent(action, before, { sessionId, seq }),
@@ -399,7 +552,10 @@ export function App() {
     const entry = pastRef.current.pop();
     if (!entry) return;
     futureRef.current.push(entry);
-    setShell(entry.before);
+    // Same same-tick reasoning as `manipulate`: commitShell keeps the ref
+    // current so an undo/redo/manipulate immediately following in the same
+    // tick sees this.
+    commitShell(entry.before);
     setDirty(!sameShell(entry.before, compositionBaselineRef.current));
     setIntent("마지막 카드 조작을 취소했습니다.");
     syncHistoryAvailability();
@@ -411,7 +567,7 @@ export function App() {
     const entry = futureRef.current.pop();
     if (!entry) return;
     pastRef.current.push(entry);
-    setShell(entry.after);
+    commitShell(entry.after);
     setDirty(!sameShell(entry.after, compositionBaselineRef.current));
     setIntent("취소한 카드 조작을 다시 적용했습니다.");
     syncHistoryAvailability();
@@ -421,7 +577,7 @@ export function App() {
   // Composition point: re-run the LLM composition folding in the accumulated
   // interaction trace (server computes the trace summary from the log).
   function recompose() {
-    void runTurn(scenarioRef.current, shell);
+    void runTurn(scenarioRef.current, shellRef.current);
   }
 
   return (
@@ -501,7 +657,14 @@ export function App() {
           aria-label="추천 결과"
           tabIndex={-1}
         >
-          <CanvasSurfaces messages={messages} layout={layout} />
+          <CanvasSurfaces
+            messages={messages}
+            layout={layout}
+            onAction={handleCanvasAction}
+            watch={watch}
+            values={values}
+            onValueChange={handleCanvasValue}
+          />
         </section>
 
         <aside className="controls" aria-label="카드 조작">

@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.js";
@@ -11,7 +11,7 @@ function compositionSse(title = "테스트 혜택"): string {
 }
 
 function compositionSseFor(
-  cards: Array<{ entityId: string; title: string; cardId?: string }>,
+  cards: Array<{ entityId: string; title: string; cardId?: string; hidden?: boolean }>,
   includeMetadata = false,
 ): string {
   const messages = cards.flatMap(({ entityId, title, cardId: requestedCardId }) => {
@@ -41,10 +41,11 @@ function compositionSseFor(
     kind: "composition",
     compositionId: "comp-test",
     messages,
-    cards: cards.map(({ entityId, title, cardId }) => ({
+    cards: cards.map(({ entityId, title, cardId, hidden }) => ({
       cardId: cardId ?? `card-${entityId}`,
       entityId,
       componentType: "BenefitCard",
+      ...(hidden ? { hidden: true } : {}),
       ...(includeMetadata
         ? {
             title,
@@ -54,6 +55,141 @@ function compositionSseFor(
         : {}),
     })),
   })}\n\n`;
+}
+
+const CATALOG = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
+
+function sseFrame(event: Record<string, unknown>): string {
+  return `event: ${String(event.kind)}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+interface InteractiveOptions {
+  nextSeq?: number;
+  hiddenEntityId?: string;
+  /** Trace-derived ticked rows the server pre-fills on checklist-a. */
+  checkedItems?: number[];
+  /** Compose without checklist-a (the candidate's Checklist drops out of this turn). */
+  withoutChecklist?: boolean;
+}
+
+function interactiveCompositionSse(options: InteractiveOptions = {}): string {
+  const checked0 = options.checkedItems?.includes(0) === true;
+  const messages = [
+    { version: "v0.9", createSurface: { surfaceId: "card-a", catalogId: CATALOG } },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "card-a",
+        components: [{ id: "root", component: "Text", text: { path: "/title" } }],
+      },
+    },
+    { version: "v0.9", updateDataModel: { surfaceId: "card-a", path: "/", value: { title: "혜택 A 본문" } } },
+    ...(options.withoutChecklist
+      ? []
+      : [
+          { version: "v0.9", createSurface: { surfaceId: "checklist-a", catalogId: CATALOG } },
+          {
+            version: "v0.9",
+            updateComponents: {
+              surfaceId: "checklist-a",
+              components: [
+                { id: "root", component: "Column", children: ["check-0"] },
+                { id: "check-0", component: "CheckBox", label: { path: "/item0Text" }, value: { path: "/checked0" } },
+              ],
+            },
+          },
+          {
+            version: "v0.9",
+            updateDataModel: { surfaceId: "checklist-a", path: "/", value: { item0Text: "재학증명서", checked0 } },
+          },
+        ]),
+    { version: "v0.9", createSurface: { surfaceId: "personas", catalogId: CATALOG } },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId: "personas",
+        components: [
+          { id: "root", component: "Column", children: ["persona-0"] },
+          {
+            id: "persona-0",
+            component: "Button",
+            child: "persona-0-label",
+            action: { event: { name: "persona.select", context: { personaId: "senior" } } },
+          },
+          { id: "persona-0-label", component: "Text", text: { path: "/persona0Label" } },
+        ],
+      },
+    },
+    { version: "v0.9", updateDataModel: { surfaceId: "personas", path: "/", value: { persona0Label: "시니어" } } },
+    ...(options.hiddenEntityId
+      ? [
+          { version: "v0.9", createSurface: { surfaceId: `card-${options.hiddenEntityId}`, catalogId: CATALOG } },
+          {
+            version: "v0.9",
+            updateComponents: {
+              surfaceId: `card-${options.hiddenEntityId}`,
+              components: [{ id: "root", component: "Text", text: { path: "/title" } }],
+            },
+          },
+          {
+            version: "v0.9",
+            updateDataModel: { surfaceId: `card-${options.hiddenEntityId}`, path: "/", value: { title: "숨긴 혜택 본문" } },
+          },
+        ]
+      : []),
+  ];
+  const cards = [
+    { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "혜택 A", emphasis: "primary" },
+    ...(options.withoutChecklist
+      ? []
+      : [
+          {
+            cardId: "checklist-a",
+            entityId: "a",
+            componentType: "Checklist",
+            title: "혜택 A · 신청 준비",
+            itemCount: 1,
+            ...(options.checkedItems ? { checkedItems: options.checkedItems } : {}),
+          },
+        ]),
+    { cardId: "personas", componentType: "PersonaSelector", title: "추천 관점" },
+    ...(options.hiddenEntityId
+      ? [{ cardId: `card-${options.hiddenEntityId}`, entityId: options.hiddenEntityId, componentType: "BenefitCard", title: "숨긴 혜택", hidden: true }]
+      : []),
+  ];
+  return (
+    sseFrame({ kind: "intent", text: "테스트 의도 문장" }) +
+    sseFrame({ kind: "composition", compositionId: "comp-interactive", messages, cards, ...(options.nextSeq !== undefined ? { nextSeq: options.nextSeq } : {}) })
+  );
+}
+
+/** fetch mock: session → interactive composition on every turn; collects event and turn bodies. */
+function interactiveFetch(options: InteractiveOptions & { sessionNextSeq?: number } = {}) {
+  const eventBodies: Array<Record<string, unknown>> = [];
+  const turnBodies: Array<Record<string, unknown>> = [];
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/session")) {
+      return new Response(
+        JSON.stringify({ sessionId: SESSION_ID, ...(options.sessionNextSeq !== undefined ? { nextSeq: options.sessionNextSeq } : {}) }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.endsWith("/api/events")) {
+      eventBodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (url.endsWith("/api/turn")) {
+      turnBodies.push(JSON.parse(String(init?.body)));
+      return new Response(interactiveCompositionSse(options), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { eventBodies, turnBodies };
 }
 
 afterEach(() => {
@@ -282,6 +418,59 @@ describe("App", () => {
     );
   });
 
+  it("merges shell rows by entity, not by a reused positional card id", async () => {
+    const turnBodies: Array<Record<string, unknown>> = [];
+    let turnCount = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), { status: 200 });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        turnCount += 1;
+        // Turn 1: only alpha, on card-1. Turn 2: a brand-new entity "beta"
+        // reuses card-1 (the positional id alpha, now pinned, used to own),
+        // and alpha reappears under a different id, card-2.
+        const cards =
+          turnCount === 1
+            ? [{ entityId: "alpha", title: "알파 혜택", cardId: "card-1" }]
+            : [
+                { entityId: "beta", title: "베타 혜택", cardId: "card-1" },
+                { entityId: "alpha", title: "알파 혜택", cardId: "card-2" },
+              ];
+        return new Response(compositionSseFor(cards), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    await screen.findByRole("button", { name: "alpha 고정" });
+    await user.click(screen.getByRole("button", { name: "alpha 고정" }));
+    await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
+
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    expect(await screen.findByRole("button", { name: "alpha 고정 해제" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // beta is a brand-new entity: it must not inherit alpha's pin just
+    // because the provider happened to reuse alpha's old card id for it.
+    expect(screen.getByRole("button", { name: "beta 고정" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("records the query before composition and records the applied result afterwards", async () => {
     const calls: string[] = [];
     const eventBodies: Array<Record<string, unknown>> = [];
@@ -332,6 +521,72 @@ describe("App", () => {
       type: "composition.applied",
       context: { compositionId: "comp-test" },
     });
+  });
+
+  it("counts only the visible cards in the status fallback sentence", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), { status: 200 });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        // No "intent" frame: the client falls back to counting cards itself.
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택" },
+            { entityId: "beta", title: "두 번째 혜택", hidden: true },
+            { entityId: "gamma", title: "세 번째 혜택" },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("2개 카드를 구성했습니다."),
+    );
+  });
+
+  it("explains when a composition arrives with every card hidden", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), { status: 200 });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택", hidden: true },
+            { entityId: "beta", title: "두 번째 혜택", hidden: true },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.",
+      ),
+    );
   });
 
   it("keeps a successful composition applied when only its audit event fails", async () => {
@@ -568,6 +823,110 @@ describe("App", () => {
     ]);
   });
 
+  it("applies two manipulations dispatched in the same tick without losing either", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택" },
+            { entityId: "beta", title: "두 번째 혜택" },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
+
+    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
+    const hideAlpha = screen.getByRole("button", { name: "alpha 숨기기" });
+    // fireEvent.click flushes (and re-renders) after every call, so it cannot
+    // reproduce two manipulations landing in the same JS tick. A raw DOM
+    // click inside one `act` batch does: React queues both state updates
+    // without a render in between, which is what exposed the stale-`before`
+    // bug in `manipulate`.
+    act(() => {
+      pinBeta.click();
+      hideAlpha.click();
+    });
+
+    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "alpha 다시 보기" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("carries a same-tick manipulation into a scenario selection's turn trigger", async () => {
+    const turnBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택" },
+            { entityId: "beta", title: "두 번째 혜택" },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
+    await waitFor(() => expect(turnBodies).toHaveLength(1));
+
+    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
+    const secondScenario = screen.getByRole("button", { name: "청년 구직자" });
+    // Same same-tick reasoning as the manipulation test above: a raw click
+    // inside one `act` batch pins beta and selects the second scenario
+    // before React re-renders, so `selectScenario` sees the manipulation
+    // only if it reads `shellRef.current` rather than the render closure's
+    // (stale) `shell`.
+    act(() => {
+      pinBeta.click();
+      secondScenario.click();
+    });
+
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    const secondTurnCards = (
+      turnBodies[1]!.currentComposition as { cards: Array<{ entityId?: string; pinned?: boolean }> }
+    ).cards;
+    expect(secondTurnCards.find((card) => card.entityId === "beta")?.pinned).toBe(true);
+  });
+
   it("keeps the previous composition and explains how to recover when a turn fails", async () => {
     let turnCount = 0;
     const eventBodies: Array<Record<string, unknown>> = [];
@@ -618,5 +977,339 @@ describe("App", () => {
         }),
       ),
     );
+  });
+});
+
+describe("App — interactive catalog", () => {
+  it("adopts the server-issued sequence from the session and from each turn", async () => {
+    const { eventBodies } = interactiveFetch({ sessionNextSeq: 1, nextSeq: 5 });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    expect(await screen.findByText("혜택 A")).toBeInTheDocument();
+    await waitFor(() => expect(eventBodies).toHaveLength(2));
+    expect(eventBodies[0]).toMatchObject({ seq: 1, type: "query.submit" });
+    expect(eventBodies[1]).toMatchObject({ seq: 5, type: "composition.applied" });
+  });
+
+  it("shows the server's intent sentence and the undo-reset notice after a composition", async () => {
+    interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    expect(await screen.findByText("혜택 A")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장");
+  });
+
+  it("records checklist ticks as trace events and undoes them with the inverse event", async () => {
+    const { eventBodies } = interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const box = await screen.findByRole("checkbox", { name: "재학증명서" });
+    await user.click(box);
+    await waitFor(() =>
+      expect(eventBodies.at(-1)).toMatchObject({
+        type: "checklist.check",
+        payload: { itemIndex: 0 },
+        target: { cardId: "checklist-a", entityId: "a", componentType: "Checklist" },
+      }),
+    );
+    expect((box as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "실행 취소" }));
+    await waitFor(() => expect(eventBodies.at(-1)).toMatchObject({ type: "checklist.uncheck", payload: { itemIndex: 0 } }));
+    expect(((await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("switches persona from a server-composed button through the normal composition point", async () => {
+    const { eventBodies, turnBodies } = interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await user.click(await screen.findByRole("button", { name: "시니어" }));
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    expect(turnBodies[1]).toMatchObject({ trigger: { type: "persona.switch", personaId: "senior" } });
+    expect(eventBodies.some((e) => e.type === "persona.switch" && (e.payload as { personaId: string }).personaId === "senior")).toBe(true);
+    expect((screen.getByRole("combobox", { name: "추천 관점" }) as HTMLSelectElement).value).toBe("senior");
+  });
+
+  it("keeps a hidden card in the shell after recomposition so it can be shown again", async () => {
+    interactiveFetch({ hiddenEntityId: "z" });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const canvas = within(screen.getByRole("region", { name: "추천 결과" }));
+    expect(await canvas.findByText("혜택 A 본문")).toBeInTheDocument();
+    expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" }));
+    expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
+  });
+
+  it("ignores a checklist tick while a turn is in flight and restores the box", async () => {
+    // fetch mock whose /api/turn never resolves until we release it
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const eventBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          eventBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          if (turns === 2) await gate;
+          return new Response(interactiveCompositionSse({ nextSeq: 3 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const box = (await screen.findByRole("checkbox", { name: "재학증명서" })) as HTMLInputElement;
+    // start a second turn that stays pending, then tick while busy
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await user.click(box);
+    expect(eventBodies.some((e) => e.type === "checklist.check")).toBe(false);
+    await waitFor(() =>
+      expect((screen.getByRole("checkbox", { name: "재학증명서" }) as HTMLInputElement).checked).toBe(
+        false,
+      ),
+    );
+    release();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+  });
+
+  it("ignores a composed persona button while a turn is busy", async () => {
+    // fetch mock whose second /api/turn never resolves until we release it
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const eventBodies: Array<Record<string, unknown>> = [];
+    const turnBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          eventBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          turnBodies.push(JSON.parse(String(init?.body)));
+          if (turns === 2) await gate;
+          return new Response(interactiveCompositionSse({ nextSeq: 3 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await screen.findByRole("button", { name: "시니어" });
+    const personaSelect = screen.getByRole("combobox", { name: "추천 관점" }) as HTMLSelectElement;
+    expect(personaSelect.value).toBe("university_student");
+
+    // Start a second turn that stays pending (busy), then click the
+    // server-composed "시니어" persona button while it's in flight. The
+    // canvas renderer has no notion of `busy` (only the sidebar controls are
+    // disabled by it), so this button stays clickable and App must ignore it.
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(turnBodies).toHaveLength(2);
+    expect(eventBodies).toHaveLength(3);
+
+    await user.click(screen.getByRole("button", { name: "시니어" }));
+
+    // Nothing observable changed: the busy status text was not overwritten,
+    // the persona select still reflects the in-flight scenario switch (not
+    // "senior"), and the click produced no new /api/turn or /api/events call.
+    // Note: for this *valid* action, `applyPersona`'s own `if (busy) return`
+    // already makes this a no-op even without `handleCanvasAction`'s guard —
+    // this test is regression coverage for the documented "every canvas
+    // action is ignored while busy" contract, not a discriminator between
+    // the two guards. The guard in `handleCanvasAction` is load-bearing for
+    // an *invalid* action instead (untestable through this DOM pipeline; see
+    // that guard's comment).
+    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(personaSelect.value).toBe("youth_jobseeker");
+    expect(turnBodies).toHaveLength(2);
+    expect(eventBodies).toHaveLength(3);
+
+    release();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+  });
+
+  it("hides a currently visible card when the next composition ships it in the hidden tail", async () => {
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          // first turn: entity "z" visible; second turn: same entity in the hidden tail
+          const body =
+            turns === 1
+              ? compositionSseFor([{ entityId: "z", title: "숨긴 혜택 본문" }])
+              : interactiveCompositionSse({ hiddenEntityId: "z" });
+          return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    const canvas = within(screen.getByRole("region", { name: "추천 결과" }));
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await waitFor(() => expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" })).toBeInTheDocument();
+  });
+
+  it("starts a re-entering Checklist from the server's checked rows without posting a tick", async () => {
+    const eventBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          eventBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          // turn 1: Checklist with a ticked row; turn 2: without it; turn 3: back again
+          const body = interactiveCompositionSse(
+            turns === 2 ? { withoutChecklist: true } : { checkedItems: [0] },
+          );
+          return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const applied = () => eventBodies.filter((e) => e.type === "composition.applied").length;
+    const ticks = () =>
+      eventBodies.filter((e) => e.type === "checklist.check" || e.type === "checklist.uncheck");
+    const box = () => screen.getByRole("checkbox", { name: "재학증명서" }) as HTMLInputElement;
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(applied()).toBe(1));
+    expect(box().checked).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await waitFor(() => expect(applied()).toBe(2));
+    expect(screen.queryByRole("checkbox", { name: "재학증명서" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(applied()).toBe(3));
+    expect(box().checked).toBe(true);
+    expect(ticks()).toEqual([]);
+
+    // The shell row owns the tick now: clearing it records an uncheck.
+    await user.click(box());
+    await waitFor(() => expect(ticks().at(-1)).toMatchObject({ type: "checklist.uncheck", payload: { itemIndex: 0 } }));
+  });
+
+  it("re-synchronises its sequence from a conflict reply after a lost turn response", async () => {
+    const eventBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    let rejectedPosts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          eventBodies.push(body);
+          // The server recorded tool.called for the lost turn, so the client's
+          // next number is stale; the conflict reply says which one to use.
+          if (body.type === "composition.rejected" && ++rejectedPosts === 1) {
+            return new Response(
+              JSON.stringify({ ok: false, error: "Event sequence conflict", nextSeq: 5 }),
+              { status: 409, headers: { "content-type": "application/json" } },
+            );
+          }
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          if (turns === 2) return new Response("lost", { status: 500 });
+          return new Response(interactiveCompositionSse({ nextSeq: 2 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(eventBodies.some((e) => e.type === "composition.applied")).toBe(true));
+
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    await waitFor(() =>
+      expect(eventBodies.filter((e) => e.type === "composition.rejected")).toHaveLength(2),
+    );
+    const rejected = eventBodies.filter((e) => e.type === "composition.rejected");
+    expect(rejected.map((e) => e.seq)).toEqual([4, 5]);
+    expect(rejected[1]).toMatchObject({ payload: { reason: "turn_failed" } });
+    expect(screen.getByRole("status")).toHaveTextContent("추천을 갱신하지 못했습니다");
+
+    await user.click(await screen.findByRole("button", { name: "혜택 A 고정" }));
+    await waitFor(() => expect(eventBodies.at(-1)).toMatchObject({ type: "card.pin", seq: 6 }));
   });
 });

@@ -2,6 +2,8 @@ import { z } from "zod";
 import { CatalogComponentTypeSchema, validateCatalogProps } from "./catalog.js";
 import { RecommendationPersonaSchema, StrictUserProfileSchema } from "./gateway.js";
 import {
+  CHECKLIST_MAX_ITEMS,
+  ChecklistItemIndexSchema,
   OpaqueEntityIdSchema,
   OpaqueIdentifierSchema,
   UserQueryTextSchema,
@@ -18,16 +20,28 @@ const DefinitiveEligibilityPattern = new RegExp(
   ].join("|"),
 );
 
-export const SafeRationaleSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(200)
-  .refine((value) => !UnsafeRationalePattern.test(value), "rationale contains markup or a URL")
-  .refine(
-    (value) => !DefinitiveEligibilityPattern.test(value),
-    "rationale contains a definitive eligibility claim",
-  );
+/** Model-written text shown to users: no markup/URL, no definitive eligibility claim. */
+function safeModelSentence(label: string, max: number) {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine((value) => !UnsafeRationalePattern.test(value), `${label} contains markup or a URL`)
+    .refine(
+      (value) => !DefinitiveEligibilityPattern.test(value),
+      `${label} contains a definitive eligibility claim`,
+    );
+}
+
+export const SafeRationaleSchema = safeModelSentence("rationale", 200);
+
+/**
+ * The provider's intent sentence, streamed to the status line only when it
+ * passes the same rule as card rationales. `CompositionSpecSchema.intentSummary`
+ * stays permissive so an unsafe sentence drops the sentence, not the composition.
+ */
+export const SafeIntentSummarySchema = safeModelSentence("intent summary", 500);
 
 /** Points a card at a cached gateway tool result instead of inlining data. */
 export const EntityRefSchema = z.discriminatedUnion("toolResult", [
@@ -157,11 +171,11 @@ export type CompositionSpec = z.infer<typeof CompositionSpecSchema>;
 
 export const EntityEngagementSchema = z.object({
   entityId: OpaqueEntityIdSchema,
-  title: z.string().max(240),
   pinned: z.boolean(),
   hidden: z.boolean(),
   expandCount: z.number().int().nonnegative().max(10_000),
-  dwellRank: z.number().int().positive().max(100).optional(),
+  /** The server emits them sorted and unique; the schema only bounds each index. */
+  checkedItems: z.array(ChecklistItemIndexSchema).max(CHECKLIST_MAX_ITEMS),
   lastAction: z.string().max(64).optional(),
 }).strict();
 export type EntityEngagement = z.infer<typeof EntityEngagementSchema>;

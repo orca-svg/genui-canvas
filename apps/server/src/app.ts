@@ -9,10 +9,14 @@ import {
   CompositionTriggerSchema,
   CurrentCompositionSchema,
   InteractionEventSchema,
+  SafeIntentSummarySchema,
   ServerEventSchema,
   SessionIdSchema,
   StrictUserProfileSchema,
   UserQueryTextSchema,
+  createInteractionEvent,
+  type InteractionEvent,
+  type ServerEvent,
 } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
 import { GatewayCompatibilityError } from "./mcp/gateway-client.js";
@@ -22,6 +26,12 @@ import type { TraceStore } from "./trace/store.js";
 export interface AppDeps extends ComposerDeps {
   traceStore: TraceStore;
   corsOrigins?: readonly string[];
+}
+
+interface SessionState {
+  seq: number;
+  lastEvent?: InteractionEvent;
+  eventIds: Set<string>;
 }
 
 const DEFAULT_CORS_ORIGINS = ["http://localhost:5180", "http://localhost:5181"] as const;
@@ -34,6 +44,13 @@ const TurnBodySchema = z.object({
   query: UserQueryTextSchema.optional(),
 }).strict();
 
+/** Every SSE frame's `data:` payload is the wire-schema-validated JSON of a ServerEvent. */
+function serverEventData(event: ServerEvent): string {
+  return JSON.stringify(ServerEventSchema.parse(event));
+}
+
+type CompositionServerEvent = Extract<ServerEvent, { kind: "composition" }>;
+
 /**
  * HTTP surface. /api/turn runs a composition point and streams the resulting
  * A2UI messages over SSE; /api/events records fine-grained manipulations to the
@@ -42,14 +59,16 @@ const TurnBodySchema = z.object({
  */
 export function createApp(deps: AppDeps) {
   const app = new Hono();
-  const sessions = new Map<
-    string,
-    {
-      seq: number;
-      lastEvent?: z.infer<typeof InteractionEventSchema>;
-      eventIds: Set<string>;
-    }
-  >();
+  const sessions = new Map<string, SessionState>();
+
+  /** Server-originated trace rows share the session's single sequence with client events. */
+  function appendServerEvent(session: SessionState, event: InteractionEvent): void {
+    deps.traceStore.append(event);
+    session.seq += 1;
+    session.lastEvent = event;
+    session.eventIds.add(event.eventId);
+  }
+
   const envCorsOrigins = process.env.GENUI_CORS_ORIGINS?.split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
@@ -78,8 +97,19 @@ export function createApp(deps: AppDeps) {
 
   app.post("/api/session", (c) => {
     const sessionId = randomUUID();
-    sessions.set(sessionId, { seq: 0, eventIds: new Set() });
-    return c.json({ sessionId });
+    const session: SessionState = { seq: 0, eventIds: new Set() };
+    sessions.set(sessionId, session);
+    appendServerEvent(
+      session,
+      createInteractionEvent({
+        sessionId,
+        seq: 0,
+        actor: "system",
+        type: "session.start",
+        context: { compositionId: "session", visibleCardIds: [] },
+      }),
+    );
+    return c.json({ sessionId, nextSeq: session.seq });
   });
 
   app.post("/api/events", async (c) => {
@@ -111,7 +141,9 @@ export function createApp(deps: AppDeps) {
       return c.json({ ok: false, error: "Event identity conflict" }, 409);
     }
     if (parsed.data.seq !== session.seq) {
-      return c.json({ ok: false, error: "Event sequence conflict" }, 409);
+      // Server rows (tool.called) share this sequence; a client that lost a
+      // turn's nextSeq re-synchronises from this reply instead of jamming.
+      return c.json({ ok: false, error: "Event sequence conflict", nextSeq: session.seq }, 409);
     }
     deps.traceStore.append(parsed.data);
     session.seq += 1;
@@ -132,7 +164,8 @@ export function createApp(deps: AppDeps) {
       return c.json({ ok: false, error: "Invalid request body" }, 400);
     }
     const body = parsed.data;
-    if (!sessions.has(body.sessionId)) {
+    const session = sessions.get(body.sessionId);
+    if (!session) {
       return c.json({ ok: false, error: "Session not found" }, 404);
     }
     // Close the loop server-side: the trace summary is always computed from the
@@ -141,47 +174,72 @@ export function createApp(deps: AppDeps) {
       ...body,
       traceSummary: summarizeTrace(deps.traceStore.read(body.sessionId)),
     };
+    const compositionId = randomUUID();
     return streamSSE(c, async (stream) => {
       await stream.writeSSE({
         event: "status",
-        data: JSON.stringify({ kind: "status", message: "게이트웨이에서 후보를 검색하고 구성 중" }),
+        data: serverEventData({ kind: "status", message: "게이트웨이에서 후보를 검색하고 구성 중" }),
       });
       try {
         const result = await composeTurn(deps, turn);
+        if (result.toolCalls.length > 0) {
+          appendServerEvent(
+            session,
+            createInteractionEvent({
+              sessionId: body.sessionId,
+              seq: session.seq,
+              actor: "system",
+              type: "tool.called",
+              payload: { tools: result.toolCalls },
+              context: { compositionId, visibleCardIds: [] },
+            }),
+          );
+        }
         if (result.ok) {
+          // The sentence is model-written: stream it only when it passes the
+          // rationale safety rule; otherwise the shell shows its own count line.
+          const intent = SafeIntentSummarySchema.safeParse(result.spec.intentSummary);
+          if (intent.success) {
+            await stream.writeSSE({
+              event: "intent",
+              data: serverEventData({ kind: "intent", text: intent.data }),
+            });
+          }
           const metadataByCardId = new Map(
             result.cardMetadata.map((metadata) => [metadata.cardId, metadata]),
           );
-          const compositionEvent = ServerEventSchema.parse({
+          const compositionEvent: CompositionServerEvent = {
             kind: "composition",
-            compositionId: randomUUID(),
-            messages: result.messages,
+            compositionId,
+            // composer's A2uiMessage type ({version; [key: string]: unknown}) is looser than
+            // the wire schema's strict three-member union; only this field needs bridging —
+            // it is re-validated inside serverEventData, so nothing changes at runtime.
+            messages: result.messages as unknown as CompositionServerEvent["messages"],
             cards: result.spec.cards.map((card) => ({
               cardId: card.cardId,
               entityId: card.entityRef?.entityId,
               componentType: card.componentType,
               ...metadataByCardId.get(card.cardId),
             })),
-          });
-          await stream.writeSSE({
-            event: "composition",
-            data: JSON.stringify(compositionEvent),
-          });
+            nextSeq: session.seq,
+          };
+          await stream.writeSSE({ event: "composition", data: serverEventData(compositionEvent) });
         } else {
           await stream.writeSSE({
             event: "error",
-            data: JSON.stringify({ kind: "error", message: "구성을 검증하지 못했습니다" }),
+            data: serverEventData({ kind: "error", message: "구성을 검증하지 못했습니다", nextSeq: session.seq }),
           });
         }
       } catch (error) {
         await stream.writeSSE({
           event: "error",
-          data: JSON.stringify({
+          data: serverEventData({
             kind: "error",
             message:
               error instanceof GatewayCompatibilityError
                 ? "게이트웨이 응답 버전이 호환되지 않습니다. 패키지 버전을 확인하세요."
                 : "구성 중 오류가 발생했습니다",
+            nextSeq: session.seq,
           }),
         });
       }

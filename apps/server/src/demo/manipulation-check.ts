@@ -33,6 +33,17 @@ export interface ManipulationCheckReport {
   traceClosedLoop: boolean;
   recordedEventTypes: InteractionEvent["type"][];
   observedTraceSummary: TraceSummary;
+  controlComponentTypes: string[];
+  manipulatedComponentTypes: string[];
+  /** Expanded candidate gained Checklist+SourceNotice and the pinned one gained ScoreBreakdown. */
+  subCardsComposed: boolean;
+  /**
+   * Both compositions' visible order is grouped by candidate: PersonaSelector
+   * (if any) first, each candidate's cards contiguous in the fixed order,
+   * pinned groups before the others, DeadlineList (if any) last. The control
+   * composition has no pins yet; the manipulated one has the pinned entity.
+   */
+  groupedOrderPreserved: boolean;
 }
 
 type CompositionEvent = Extract<ServerEvent, { kind: "composition" }>;
@@ -58,10 +69,11 @@ function parseComposition(text: string): CompositionEvent {
   throw new Error("turn did not return a validated composition");
 }
 
-async function issueSession(app: App): Promise<string> {
+async function issueSession(app: App): Promise<{ sessionId: string; nextSeq: number }> {
   const response = await app.request("/api/session", { method: "POST" });
   if (!response.ok) throw new Error(`session failed with HTTP ${response.status}`);
-  return ((await response.json()) as { sessionId: string }).sessionId;
+  const body = (await response.json()) as { sessionId: string; nextSeq?: number };
+  return { sessionId: body.sessionId, nextSeq: body.nextSeq ?? 0 };
 }
 
 async function appendEvent(app: App, event: InteractionEvent): Promise<void> {
@@ -83,11 +95,65 @@ async function postTurn(app: App, body: Record<string, unknown>): Promise<Compos
   return parseComposition(await response.text());
 }
 
+/** Cards in the visible order: the hidden tail is shipped but never shown. */
+function visibleCards(composition: CompositionEvent) {
+  return composition.cards.filter((card) => card.hidden !== true);
+}
+
 function benefitCards(composition: CompositionEvent) {
-  return composition.cards.filter(
+  return visibleCards(composition).filter(
     (card): card is typeof card & { entityId: string } =>
       card.componentType === "BenefitCard" && typeof card.entityId === "string",
   );
+}
+
+function componentTypes(composition: CompositionEvent): string[] {
+  return [...new Set(visibleCards(composition).map((card) => card.componentType))].sort();
+}
+
+/** In-group position of the candidate-scoped components (spec: BenefitCard → ScoreBreakdown → Checklist → SourceNotice). */
+const GROUP_RANK: Readonly<Record<string, number>> = {
+  BenefitCard: 0,
+  ScoreBreakdown: 1,
+  Checklist: 2,
+  SourceNotice: 3,
+};
+
+/**
+ * True when a visible card sequence follows the candidate-group layout:
+ * PersonaSelector cards form a prefix, DeadlineList cards a suffix, everything
+ * in between belongs to a candidate group whose cards are contiguous and in the
+ * fixed in-group order, and every pinned group precedes every unpinned one.
+ */
+export function groupedOrderHolds(
+  cards: ReadonlyArray<{ componentType: string; entityId?: string }>,
+  pinnedEntityIds: ReadonlySet<string>,
+): boolean {
+  let start = 0;
+  while (start < cards.length && cards[start]!.componentType === "PersonaSelector") start += 1;
+  let end = cards.length;
+  while (end > start && cards[end - 1]!.componentType === "DeadlineList") end -= 1;
+
+  const finished = new Set<string>();
+  let previous: { entityId: string; rank: number } | undefined;
+  let sawUnpinnedGroup = false;
+  for (const card of cards.slice(start, end)) {
+    const rank = GROUP_RANK[card.componentType];
+    if (rank === undefined || card.entityId === undefined) return false;
+    if (previous?.entityId === card.entityId) {
+      if (rank < previous.rank) return false;
+    } else {
+      if (previous) finished.add(previous.entityId);
+      if (finished.has(card.entityId)) return false; // the group was split
+      if (pinnedEntityIds.has(card.entityId)) {
+        if (sawUnpinnedGroup) return false; // a pinned group was buried
+      } else {
+        sawUnpinnedGroup = true;
+      }
+    }
+    previous = { entityId: card.entityId, rank };
+  }
+  return true;
 }
 
 /**
@@ -118,8 +184,8 @@ export async function runManipulationCheck(
 
   try {
     const profile = options.profile ?? {};
-    const sessionId = await issueSession(app);
-    let seq = 0;
+    const { sessionId, nextSeq } = await issueSession(app);
+    let seq = nextSeq;
 
     await appendEvent(
       app,
@@ -138,6 +204,8 @@ export async function runManipulationCheck(
       profile,
       currentComposition: { cards: [] },
     });
+    seq = control.nextSeq ?? seq;
+    const controlVisible = visibleCards(control);
     const controlCards = benefitCards(control);
     const controlOrder = controlCards.map((card) => card.entityId);
     if (controlCards.length < 3) {
@@ -293,6 +361,7 @@ export async function runManipulationCheck(
       profile,
       currentComposition: { cards: currentCards },
     });
+    seq = manipulated.nextSeq ?? seq;
     const manipulatedOrder = benefitCards(manipulated).map((card) => card.entityId);
 
     await appendEvent(
@@ -322,6 +391,17 @@ export async function runManipulationCheck(
       pinnedTrace?.pinned === true &&
       hiddenTrace?.hidden === true;
 
+    const manipulatedVisible = visibleCards(manipulated);
+    const has = (componentType: string, entityId: string) =>
+      manipulatedVisible.some((card) => card.componentType === componentType && card.entityId === entityId);
+    const subCardsComposed =
+      has("Checklist", reordered.entityId) &&
+      has("SourceNotice", reordered.entityId) &&
+      has("ScoreBreakdown", pinned.entityId);
+    const groupedOrderPreserved =
+      groupedOrderHolds(controlVisible, new Set()) &&
+      groupedOrderHolds(manipulatedVisible, new Set([pinned.entityId]));
+
     return {
       query: options.query,
       pinnedEntityId: pinned.entityId,
@@ -336,6 +416,10 @@ export async function runManipulationCheck(
       traceClosedLoop,
       recordedEventTypes: recorded.map((event) => event.type),
       observedTraceSummary,
+      controlComponentTypes: componentTypes(control),
+      manipulatedComponentTypes: componentTypes(manipulated),
+      subCardsComposed,
+      groupedOrderPreserved,
     };
   } finally {
     rmSync(traceDir, { recursive: true, force: true });

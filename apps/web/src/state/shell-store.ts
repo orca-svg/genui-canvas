@@ -1,3 +1,5 @@
+import type { CatalogComponentType } from "@genui-canvas/contracts";
+
 /**
  * Shell state: the ordered set of cards and their manipulation flags. This is
  * the deterministic layer — pin/hide/expand/reorder apply instantly here,
@@ -11,9 +13,14 @@ export interface ShellCard {
   title?: string;
   sourceUrl?: string;
   sourceCheckedAt?: string;
+  emphasis?: "primary" | "secondary";
+  /** Checklist only: number of CheckBox rows bound to /checked{i}. */
+  itemCount?: number;
   pinned: boolean;
   hidden: boolean;
   expanded: boolean;
+  /** Checklist only: sorted row indexes the user ticked (a local preparation memo). */
+  checkedItems: number[];
 }
 
 export interface ShellState {
@@ -28,6 +35,12 @@ export interface ShellCardInit {
   title?: string;
   sourceUrl?: string;
   sourceCheckedAt?: string;
+  emphasis?: "primary" | "secondary";
+  itemCount?: number;
+  /** Shipped in the hidden tail: starts hidden, can be unhidden locally. */
+  hidden?: boolean;
+  /** Checklist only: rows the server's trace summary says were ticked; a new row starts from them. */
+  checkedItems?: number[];
 }
 
 export type ShellAction =
@@ -41,12 +54,19 @@ export type ShellAction =
         | "card.collapse";
       cardId: string;
     }
-  | { type: "card.reorder"; cardId: string; toIndex: number };
+  | { type: "card.reorder"; cardId: string; toIndex: number }
+  | { type: "checklist.check" | "checklist.uncheck"; cardId: string; itemIndex: number };
 
 export function createShellState(compositionId: string, cards: ShellCardInit[]): ShellState {
   return {
     compositionId,
-    cards: cards.map((card) => ({ ...card, pinned: false, hidden: false, expanded: false })),
+    cards: cards.map(({ hidden, checkedItems, ...card }) => ({
+      ...card,
+      pinned: false,
+      hidden: hidden === true,
+      expanded: false,
+      checkedItems: [...(checkedItems ?? [])],
+    })),
   };
 }
 
@@ -89,6 +109,19 @@ function moveCard(state: ShellState, cardId: string, toIndex: number): ShellStat
   return { ...state, cards };
 }
 
+function setChecked(state: ShellState, cardId: string, itemIndex: number, checked: boolean): ShellState {
+  return {
+    ...state,
+    cards: state.cards.map((card) => {
+      if (card.cardId !== cardId) return card;
+      const rows = new Set(card.checkedItems);
+      if (checked) rows.add(itemIndex);
+      else rows.delete(itemIndex);
+      return { ...card, checkedItems: [...rows].sort((a, b) => a - b) };
+    }),
+  };
+}
+
 export function shellReducer(state: ShellState, action: ShellAction): ShellState {
   switch (action.type) {
     case "card.pin":
@@ -105,6 +138,9 @@ export function shellReducer(state: ShellState, action: ShellAction): ShellState
       return setFlag(state, action.cardId, "expanded", false);
     case "card.reorder":
       return withPinnedTop(moveCard(state, action.cardId, action.toIndex));
+    case "checklist.check":
+      return setChecked(state, action.cardId, action.itemIndex, true);
+    case "checklist.uncheck":
+      return setChecked(state, action.cardId, action.itemIndex, false);
   }
 }
-import type { CatalogComponentType } from "@genui-canvas/contracts";

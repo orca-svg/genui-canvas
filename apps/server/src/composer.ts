@@ -1,10 +1,13 @@
 import {
+  CHECKLIST_MAX_ITEMS,
   OpaqueEntityIdSchema,
   type CatalogComponentType,
   type BenefitSummary,
   type CompositionContext,
   type CompositionSpec,
   type CompositionTrigger,
+  type GatewayToolName,
+  type ToolCallSummary,
   type TraceSummary,
   type UserProfile,
 } from "@genui-canvas/contracts";
@@ -13,7 +16,7 @@ import type { ComposeCandidate, ComposeResource, LlmProvider } from "./llm/provi
 import { ToolResultCache } from "./composition/tool-cache.js";
 import { validateComposition } from "./composition/validate.js";
 import { enforceManipulationInvariants } from "./composition/enforce.js";
-import { expandComposition, type A2uiMessage } from "./composition/expand.js";
+import { expandComposition, type A2uiMessage, type ExpandContext } from "./composition/expand.js";
 
 export interface ComposerDeps {
   gateway: GatewayClient;
@@ -46,14 +49,44 @@ export type TurnResult =
       spec: CompositionSpec;
       messages: A2uiMessage[];
       cardMetadata: CompositionCardMetadata[];
+      /** Cards after the visible order that the shell keeps as hidden rows. */
+      hiddenCardIds: string[];
+      toolCalls: ToolCallSummary[];
     }
-  | { ok: false; errors: string[] };
+  | { ok: false; errors: string[]; toolCalls: ToolCallSummary[] };
 
 export interface CompositionCardMetadata {
   cardId: string;
   title: string;
   sourceUrl?: string;
   sourceCheckedAt?: string;
+  emphasis?: "primary" | "secondary";
+  hidden?: boolean;
+  /** Checklist only: CheckBox rows bound to /checked{i}. */
+  itemCount?: number;
+  /** Checklist only: trace-derived ticked rows (< itemCount) a new shell row starts from. */
+  checkedItems?: number[];
+}
+
+/** Per-turn count of gateway calls, recorded as one `tool.called` trace event. */
+class ToolCallLedger {
+  private readonly byName = new Map<GatewayToolName, { calls: number; failures: number }>();
+
+  async run<T>(name: GatewayToolName, call: () => Promise<T>): Promise<T> {
+    const entry = this.byName.get(name) ?? { calls: 0, failures: 0 };
+    this.byName.set(name, entry);
+    entry.calls += 1;
+    try {
+      return await call();
+    } catch (error) {
+      entry.failures += 1;
+      throw error;
+    }
+  }
+
+  summary(): ToolCallSummary[] {
+    return [...this.byName.entries()].map(([name, counts]) => ({ name, ...counts }));
+  }
 }
 
 const MAX_COMPOSITION_CANDIDATES = 12;
@@ -66,58 +99,51 @@ const MAX_COMPOSITION_CANDIDATES = 12;
  */
 export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Promise<TurnResult> {
   const cache = new ToolResultCache();
+  const ledger = new ToolCallLedger();
 
   const query = request.trigger.type === "query.submit" ? request.trigger.text : request.query ?? "";
-  const search = (await deps.gateway.searchBenefits(query, request.profile)) as {
-    results: BenefitSummary[];
-  };
+  const search = (await ledger.run("searchBenefits", () =>
+    deps.gateway.searchBenefits(query, request.profile),
+  )) as { results: BenefitSummary[] };
   if (search.results.some((benefit) => !OpaqueEntityIdSchema.safeParse(benefit.id).success)) {
-    return { ok: false, errors: ["Gateway returned an invalid opaque entity id"] };
+    return { ok: false, errors: ["Gateway returned an invalid opaque entity id"], toolCalls: ledger.summary() };
   }
   const benefits = search.results.slice(0, MAX_COMPOSITION_CANDIDATES);
   cache.putSearchResults(benefits);
 
-  // Hydrate the trusted result cache before asking the provider to compose.
-  // Each call is deterministic and failures are isolated: search cards remain
-  // usable even when one optional gateway surface is temporarily unavailable.
   const [details, checklists, deadlines, personas] = await Promise.all([
     Promise.allSettled(
       benefits.map(async (benefit) => ({
         entityId: benefit.id,
-        data: await deps.gateway.getBenefitDetail(benefit.id),
+        data: await ledger.run("getBenefitDetail", () => deps.gateway.getBenefitDetail(benefit.id)),
       })),
     ),
     Promise.allSettled(
       benefits.map(async (benefit) => ({
         entityId: benefit.id,
-        data: await deps.gateway.buildChecklist(benefit.id),
+        data: await ledger.run("buildChecklist", () => deps.gateway.buildChecklist(benefit.id)),
       })),
     ),
-    deps.gateway.getUpcomingDeadlines(request.profile).then(
+    ledger.run("getUpcomingDeadlines", () => deps.gateway.getUpcomingDeadlines(request.profile)).then(
       (data) => ({ status: "fulfilled" as const, value: data }),
       (reason: unknown) => ({ status: "rejected" as const, reason }),
     ),
-    deps.gateway.listPersonas().then(
+    ledger.run("listPersonas", () => deps.gateway.listPersonas()).then(
       (data) => ({ status: "fulfilled" as const, value: data }),
       (reason: unknown) => ({ status: "rejected" as const, reason }),
     ),
   ]);
   for (const result of details) {
-    if (result.status === "fulfilled") {
-      cache.put("getBenefitDetail", result.value.entityId, result.value.data);
-    }
+    if (result.status === "fulfilled") cache.put("getBenefitDetail", result.value.entityId, result.value.data);
   }
   for (const result of checklists) {
-    if (result.status === "fulfilled") {
-      cache.put("buildChecklist", result.value.entityId, result.value.data);
-    }
+    if (result.status === "fulfilled") cache.put("buildChecklist", result.value.entityId, result.value.data);
   }
-  if (deadlines.status === "fulfilled") {
+  // Only offer DeadlineList when there is at least one dated row to show.
+  if (deadlines.status === "fulfilled" && deadlines.value.results.length > 0) {
     cache.put("getUpcomingDeadlines", "upcoming-deadlines", deadlines.value);
   }
-  if (personas.status === "fulfilled") {
-    cache.put("listPersonas", "personas", personas.value);
-  }
+  if (personas.status === "fulfilled") cache.put("listPersonas", "personas", personas.value);
 
   const candidates: ComposeCandidate[] = benefits.map((benefit) => ({
     toolResult: "searchBenefits",
@@ -134,31 +160,14 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
       { componentType: "ScoreBreakdown", entityRef: searchRef },
     );
     const checklistRef = { toolResult: "buildChecklist" as const, entityId: benefit.id };
-    if (cache.has(checklistRef)) {
-      resources.push({ componentType: "Checklist", entityRef: checklistRef });
-    }
+    if (cache.has(checklistRef)) resources.push({ componentType: "Checklist", entityRef: checklistRef });
     const detailRef = { toolResult: "getBenefitDetail" as const, entityId: benefit.id };
-    if (cache.has(detailRef)) {
-      resources.push({ componentType: "SourceNotice", entityRef: detailRef });
-    }
+    if (cache.has(detailRef)) resources.push({ componentType: "SourceNotice", entityRef: detailRef });
   }
-  const deadlineRef = {
-    toolResult: "getUpcomingDeadlines" as const,
-    entityId: "upcoming-deadlines" as const,
-  };
-  if (cache.has(deadlineRef)) {
-    resources.push({
-      componentType: "DeadlineList",
-      entityRef: deadlineRef,
-    });
-  }
+  const deadlineRef = { toolResult: "getUpcomingDeadlines" as const, entityId: "upcoming-deadlines" as const };
+  if (cache.has(deadlineRef)) resources.push({ componentType: "DeadlineList", entityRef: deadlineRef });
   const personasRef = { toolResult: "listPersonas" as const, entityId: "personas" as const };
-  if (cache.has(personasRef)) {
-    resources.push({
-      componentType: "PersonaSelector",
-      entityRef: personasRef,
-    });
-  }
+  if (cache.has(personasRef)) resources.push({ componentType: "PersonaSelector", entityRef: personasRef });
 
   const context: CompositionContext = {
     trigger: request.trigger,
@@ -169,43 +178,62 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
 
   const raw = await deps.provider.compose({ context, candidates, resources });
   const validation = validateComposition(raw, cache);
-  if (!validation.ok) return { ok: false, errors: validation.errors };
+  if (!validation.ok) return { ok: false, errors: validation.errors, toolCalls: ledger.summary() };
 
-  // Stage 4: direct-manipulation invariants are enforced server-side, so the
-  // provider cannot restore hidden cards, bury pinned cards, or erase an
-  // explicit user ordering signal.
-  const spec = enforceManipulationInvariants(
+  const enforced = enforceManipulationInvariants(
     validation.spec,
     request.currentComposition,
     cache,
     request.traceSummary.orderingSignal?.userReordered === true,
   );
-  const messages = expandComposition(spec, cache);
-  return { ok: true, spec, messages, cardMetadata: buildCardMetadata(spec, cache) };
+  const expandContext: ExpandContext = {
+    checkedItemsByEntity: Object.fromEntries(
+      request.traceSummary.entityEngagement
+        .filter((entry) => entry.checkedItems.length > 0)
+        .map((entry) => [entry.entityId, entry.checkedItems]),
+    ),
+    activePersonaId:
+      request.trigger.type === "persona.switch"
+        ? request.trigger.personaId
+        : stringValue(asRecord(request.profile).persona),
+  };
+  const messages = expandComposition(enforced.spec, cache, expandContext);
+  return {
+    ok: true,
+    spec: enforced.spec,
+    messages,
+    cardMetadata: buildCardMetadata(
+      enforced.spec,
+      cache,
+      new Set(enforced.hiddenCardIds),
+      expandContext.checkedItemsByEntity,
+    ),
+    hiddenCardIds: enforced.hiddenCardIds,
+    toolCalls: ledger.summary(),
+  };
 }
 
 function buildCardMetadata(
   spec: CompositionSpec,
   cache: ToolResultCache,
+  hiddenIds: Set<string>,
+  checkedItemsByEntity: ExpandContext["checkedItemsByEntity"],
 ): CompositionCardMetadata[] {
   return spec.order.flatMap((cardId) => {
     const card = spec.cards.find((candidate) => candidate.cardId === cardId);
     if (!card) return [];
+    const common = {
+      cardId,
+      ...(card.emphasis ? { emphasis: card.emphasis } : {}),
+      ...(hiddenIds.has(cardId) ? { hidden: true } : {}),
+    };
 
-    if (card.componentType === "DeadlineList") {
-      return [{ cardId, title: "다가오는 신청 마감" }];
-    }
-    if (card.componentType === "PersonaSelector") {
-      return [{ cardId, title: "추천 관점" }];
-    }
+    if (card.componentType === "DeadlineList") return [{ ...common, title: "다가오는 신청 마감" }];
+    if (card.componentType === "PersonaSelector") return [{ ...common, title: "추천 관점" }];
 
     const entityId = card.entityRef.entityId;
-    const summary = asRecord(
-      cache.get({ toolResult: "searchBenefits", entityId }),
-    );
-    const detailResponse = asRecord(
-      cache.get({ toolResult: "getBenefitDetail", entityId }),
-    );
+    const summary = asRecord(cache.get({ toolResult: "searchBenefits", entityId }));
+    const detailResponse = asRecord(cache.get({ toolResult: "getBenefitDetail", entityId }));
     const detail = asRecord(detailResponse.result);
     const baseTitle = stringValue(summary.title) ?? stringValue(detail.title) ?? entityId;
     const suffix: Record<string, string> = {
@@ -214,14 +242,23 @@ function buildCardMetadata(
       SourceNotice: " · 출처",
     };
     const metadata: CompositionCardMetadata = {
-      cardId,
+      ...common,
       title: `${baseTitle}${suffix[card.componentType] ?? ""}`,
     };
+    if (card.componentType === "Checklist") {
+      const checklist = asRecord(cache.get({ toolResult: "buildChecklist", entityId }));
+      const items = Array.isArray(checklist.items) ? checklist.items : [];
+      const itemCount = Math.min(items.length, CHECKLIST_MAX_ITEMS);
+      metadata.itemCount = itemCount;
+      // The same rows expand pre-fills as /checked{i}: true, so a shell row that
+      // re-enters the canvas starts from them instead of overwriting them.
+      const checked = (checkedItemsByEntity[entityId] ?? []).filter((index) => index < itemCount);
+      if (checked.length > 0) metadata.checkedItems = [...checked];
+    }
     const sourceLink = preferredOfficialLink(detail.links, "source");
     if (sourceLink) metadata.sourceUrl = sourceLink.url;
     const freshness = asRecord(detail.freshness);
-    const sourceCheckedAt =
-      stringValue(sourceLink?.verifiedAt) ?? stringValue(freshness.observedAt);
+    const sourceCheckedAt = stringValue(sourceLink?.verifiedAt) ?? stringValue(freshness.observedAt);
     if (sourceCheckedAt) metadata.sourceCheckedAt = sourceCheckedAt;
     return [metadata];
   });

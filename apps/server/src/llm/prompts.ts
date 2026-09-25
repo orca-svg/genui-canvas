@@ -30,6 +30,13 @@ Rules:
 - Recommendations are candidates, not eligibility decisions. No definitive
   eligibility claims.
 - props are scalar presentation flags only; never include href/url/html.
+- Composition guidance (the deterministic baseline follows exactly this; you
+  may refine within it): every non-hidden candidate gets a BenefitCard; add
+  ScoreBreakdown for pinned candidates; add Checklist and SourceNotice for
+  expanded candidates; keep Checklist while checked>0; add DeadlineList when
+  it is offered; add PersonaSelector only for a persona.switch request, first.
+- Group sub-cards right after their BenefitCard in the order BenefitCard,
+  ScoreBreakdown, Checklist, SourceNotice.
 
 Output ONLY a JSON object, no prose and no markdown fences, of the form:
 {"intentSummary": string, "cards": [{"cardId": string, "componentType": string,
@@ -68,7 +75,7 @@ export function buildComposePrompt(request: ComposeRequest): string {
   const engagement = context.traceSummary.entityEngagement
     .map(
       (e) =>
-        `- ${e.entityId} pinned=${e.pinned} hidden=${e.hidden} expands=${e.expandCount}${e.lastAction ? ` (${e.lastAction})` : ""}`,
+        `- ${e.entityId} pinned=${e.pinned} hidden=${e.hidden} expands=${e.expandCount} checked=${e.checkedItems.length}${e.lastAction ? ` (${e.lastAction})` : ""}`,
     )
     .join("\n");
 

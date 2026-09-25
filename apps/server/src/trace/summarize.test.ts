@@ -79,4 +79,52 @@ describe("summarizeTrace", () => {
     expect(manipulated.entityEngagement.find((e) => e.entityId === "b")?.pinned).toBe(true);
     expect(manipulated.entityEngagement.find((e) => e.entityId === "c")?.hidden).toBe(true);
   });
+
+  it("tracks ticked checklist rows per entity as a sorted unique set", () => {
+    const s = summarizeTrace([
+      ev("checklist.check", "a", { payload: { itemIndex: 3 } }),
+      ev("checklist.check", "a", { payload: { itemIndex: 1 } }),
+      ev("checklist.check", "a", { payload: { itemIndex: 3 } }),
+      ev("checklist.uncheck", "a", { payload: { itemIndex: 1 } }),
+      ev("checklist.check", "a", { payload: { itemIndex: 0 } }),
+    ]);
+    expect(s.entityEngagement[0]).toMatchObject({ entityId: "a", checkedItems: [0, 3] });
+    expect(s.entityEngagement[0]).not.toHaveProperty("title");
+  });
+
+  it("omits server bookkeeping events from the bounded recent history but still counts turns", () => {
+    const s = summarizeTrace([
+      ev("session.start", undefined, { actor: "system" }),
+      ev("query.submit", undefined, { payload: { text: "q" } }),
+      ev("tool.called", undefined, {
+        actor: "system",
+        payload: { tools: [{ name: "searchBenefits", calls: 1, failures: 0 }] },
+      }),
+    ]);
+    expect(s.recentEvents).toEqual(["user query.submit"]);
+    expect(s.turnCount).toBe(1);
+  });
+
+  it("ignores a checklist payload whose index is out of bounds", () => {
+    const s = summarizeTrace([ev("checklist.check", "a", { payload: { itemIndex: 90 } })]);
+    expect(s.entityEngagement[0]?.checkedItems).toEqual([]);
+  });
+
+  it("leaves checkedItems empty when unchecking a row that was never checked", () => {
+    const s = summarizeTrace([ev("checklist.uncheck", "a", { payload: { itemIndex: 5 } })]);
+    expect(s.entityEngagement[0]?.checkedItems).toEqual([]);
+  });
+
+  it("creates no engagement entries when only silent bookkeeping events target an entity", () => {
+    const s = summarizeTrace([
+      ev("session.start", "a", { actor: "system" }),
+      ev("tool.called", "b", {
+        actor: "system",
+        payload: { tools: [{ name: "searchBenefits", calls: 1, failures: 0 }] },
+      }),
+    ]);
+    expect(s.entityEngagement).toEqual([]);
+    expect(s.turnCount).toBe(0);
+    expect(s.recentEvents).toEqual([]);
+  });
 });

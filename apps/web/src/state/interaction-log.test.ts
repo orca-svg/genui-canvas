@@ -51,4 +51,21 @@ describe("deriveInteractionEvent", () => {
     expect(event.type).toBe("card.reorder");
     expect(event.payload).toMatchObject({ toIndex: 0 });
   });
+
+  it("produces a schema-valid checklist.check event carrying only the row index", () => {
+    const shell = createShellState("comp-1", [
+      { cardId: "checklist-a", entityId: "national-scholarship", componentType: "Checklist", itemCount: 2 },
+    ]);
+    const event = deriveInteractionEvent(
+      { type: "checklist.check", cardId: "checklist-a", itemIndex: 1 },
+      shell,
+      { sessionId: "11111111-1111-4111-8111-111111111111", seq: 9 },
+    );
+    expect(() => InteractionEventSchema.parse(event)).not.toThrow();
+    expect(event).toMatchObject({
+      type: "checklist.check",
+      payload: { itemIndex: 1 },
+      target: { cardId: "checklist-a", entityId: "national-scholarship", componentType: "Checklist" },
+    });
+  });
 });
