@@ -1043,6 +1043,78 @@ describe("App — interactive catalog", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
   });
 
+  it("ignores a composed persona button while a turn is busy", async () => {
+    // fetch mock whose second /api/turn never resolves until we release it
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const eventBodies: Array<Record<string, unknown>> = [];
+    const turnBodies: Array<Record<string, unknown>> = [];
+    let turns = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/session")) {
+          return new Response(JSON.stringify({ sessionId: SESSION_ID, nextSeq: 1 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/api/events")) {
+          eventBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        if (url.endsWith("/api/turn")) {
+          turns += 1;
+          turnBodies.push(JSON.parse(String(init?.body)));
+          if (turns === 2) await gate;
+          return new Response(interactiveCompositionSse({ nextSeq: 3 }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await screen.findByRole("button", { name: "시니어" });
+    const personaSelect = screen.getByRole("combobox", { name: "추천 관점" }) as HTMLSelectElement;
+    expect(personaSelect.value).toBe("university_student");
+
+    // Start a second turn that stays pending (busy), then click the
+    // server-composed "시니어" persona button while it's in flight. The
+    // canvas renderer has no notion of `busy` (only the sidebar controls are
+    // disabled by it), so this button stays clickable and App must ignore it.
+    await user.click(screen.getByRole("button", { name: "청년 구직자" }));
+    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(turnBodies).toHaveLength(2);
+    expect(eventBodies).toHaveLength(3);
+
+    await user.click(screen.getByRole("button", { name: "시니어" }));
+
+    // Nothing observable changed: the busy status text was not overwritten,
+    // the persona select still reflects the in-flight scenario switch (not
+    // "senior"), and the click produced no new /api/turn or /api/events call.
+    // Note: for this *valid* action, `applyPersona`'s own `if (busy) return`
+    // already makes this a no-op even without `handleCanvasAction`'s guard —
+    // this test is regression coverage for the documented "every canvas
+    // action is ignored while busy" contract, not a discriminator between
+    // the two guards. The guard in `handleCanvasAction` is load-bearing for
+    // an *invalid* action instead (untestable through this DOM pipeline; see
+    // that guard's comment).
+    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(personaSelect.value).toBe("youth_jobseeker");
+    expect(turnBodies).toHaveLength(2);
+    expect(eventBodies).toHaveLength(3);
+
+    release();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+  });
+
   it("hides a currently visible card when the next composition ships it in the hidden tail", async () => {
     let turns = 0;
     vi.stubGlobal(

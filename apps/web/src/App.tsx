@@ -420,7 +420,9 @@ export function App() {
     // While a turn is in flight, every canvas action is ignored — including
     // an invalid one, which would otherwise overwrite the busy status text
     // with "알 수 없는 카드 동작은 무시했습니다." (`applyPersona` already guards
-    // the valid case on its own).
+    // the valid case on its own, which is why a *valid* composed action
+    // while busy is a no-op even without this line — see the "ignores a
+    // composed persona button while a turn is busy" test's comment).
     if (busy) return;
     const parsed = CanvasActionSchema.safeParse({ name: action.name, context: action.context });
     if (!parsed.success) {
