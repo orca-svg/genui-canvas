@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInteractionEvent } from "@genui-canvas/contracts";
+import { createInteractionEvent, ServerEventSchema } from "@genui-canvas/contracts";
 import { GatewayClient, GatewayCompatibilityError } from "./mcp/gateway-client.js";
 import { RuleBasedProvider } from "./llm/provider.js";
 import { TraceStore } from "./trace/store.js";
@@ -105,7 +105,7 @@ describe("POST /api/events", () => {
     expect(traceStore.read(sessionId)).toHaveLength(2);
   });
 
-  it("rejects a first client event that does not continue the server-issued sequence", async () => {
+  it("rejects a stale sequence after a later event was accepted", async () => {
     const sessionId = await issueSession();
     expect((await postInteractionEvent(sessionId, 1)).status).toBe(200);
     expect((await postInteractionEvent(sessionId, 0)).status).toBe(409);
@@ -606,6 +606,32 @@ describe("server-side trace bookkeeping", () => {
     expect(error.nextSeq).toBe(1);
     expect(error.message).not.toContain("boom");
     expect(traceStore.read(sessionId).map((e) => e.type)).toEqual(["session.start"]);
+  });
+
+  it("emits status and error SSE frames that satisfy the wire ServerEvent schema, nextSeq included", async () => {
+    const throwingGateway = {
+      async searchBenefits() {
+        throw new Error("boom");
+      },
+    } as unknown as GatewayClient;
+    const local = createApp({ gateway: throwingGateway, provider: new RuleBasedProvider(), traceStore });
+    const sessionId = await issueSession(local);
+    const turn = await local.request("/api/turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        trigger: { type: "query.submit", text: "x" },
+        profile: {},
+        currentComposition: { cards: [] },
+      }),
+    });
+    const frames = sseFrames(await turn.text());
+    const status = frames.find((f) => f.kind === "status");
+    const error = frames.find((f) => f.kind === "error");
+    expect(ServerEventSchema.safeParse(status).success).toBe(true);
+    expect(ServerEventSchema.safeParse(error).success).toBe(true);
+    expect((error as { nextSeq?: number } | undefined)?.nextSeq).toBe(1);
   });
 
   it("still records tool.called and advances nextSeq when the provider output is rejected", async () => {

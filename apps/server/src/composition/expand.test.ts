@@ -574,4 +574,143 @@ describe("expandComposition — interactive catalog", () => {
     expect(components.length).toBeLessThanOrEqual(200);
     expect(A2uiMessageSchema.safeParse(messages[7]).success).toBe(true);
   });
+
+  it("omits the score row and breakdown children from the BenefitCard body when showScore is false", () => {
+    const spec = {
+      intentSummary: "점수 숨김",
+      cards: [
+        {
+          cardId: "c1",
+          componentType: "BenefitCard" as const,
+          entityRef: { toolResult: "searchBenefits" as const, entityId: summary.id },
+          props: { showScore: false },
+          rationale: "r",
+        },
+      ],
+      order: ["c1"],
+    };
+
+    const messages = expandComposition(spec, cacheWith(summary));
+    const { body, byId } = surfaceParts(messages, "c1");
+
+    expect(body).not.toContain("scoreRow");
+    expect(body).not.toContain("scoreBreakdown");
+    expect(byId.has("scoreRow")).toBe(false);
+    expect(byId.has("scoreValue")).toBe(false);
+  });
+
+  it("renders an empty PersonaSelector body when every persona id is invalid", () => {
+    const cache = new ToolResultCache();
+    cache.put("listPersonas", "personas", {
+      personas: [
+        { id: "not-a-persona", description: "무시됨", weights: {} },
+        { id: "also-invalid", description: "무시됨", weights: {} },
+      ],
+    });
+    const spec = {
+      intentSummary: "무효 관점",
+      cards: [
+        {
+          cardId: "persona-card",
+          componentType: "PersonaSelector" as const,
+          entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["persona-card"],
+    };
+
+    const messages = expandComposition(spec, cache);
+    const { body, value } = surfaceParts(messages, "persona-card");
+
+    expect(body.filter((id) => id.startsWith("persona-"))).toEqual([]);
+    expect(value.personas).toEqual([]);
+  });
+
+  it("omits the current-view marker on every persona label when activePersonaId is undefined", () => {
+    const cache = new ToolResultCache();
+    cache.put("listPersonas", "personas", {
+      personas: [{ id: "general", description: "일반", weights: {} }],
+    });
+    const spec = {
+      intentSummary: "관점 미선택",
+      cards: [
+        {
+          cardId: "persona-card",
+          componentType: "PersonaSelector" as const,
+          entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["persona-card"],
+    };
+
+    const messages = expandComposition(spec, cache); // no context => activePersonaId is undefined
+    const { value } = surfaceParts(messages, "persona-card");
+
+    expect(value.activePersonaId).toBe("");
+    expect(value.persona0Label).toBe("일반");
+    expect(value.persona0Label).not.toContain("현재 관점");
+  });
+
+  it("keeps the CheckBox row count bounded by the item count even with an out-of-range checked index", () => {
+    const cache = new ToolResultCache();
+    cache.put("buildChecklist", summary.id, {
+      benefitId: summary.id,
+      items: [
+        { id: "a", label: "항목 1", required: true },
+        { id: "b", label: "항목 2", required: false },
+      ],
+      caveats: [],
+    });
+    const spec = {
+      intentSummary: "범위 밖 체크",
+      cards: [
+        {
+          cardId: "checklist-card",
+          componentType: "Checklist" as const,
+          entityRef: { toolResult: "buildChecklist" as const, entityId: summary.id },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["checklist-card"],
+    };
+
+    const messages = expandComposition(spec, cache, {
+      checkedItemsByEntity: { [summary.id]: [0, 1, 55] },
+    });
+    const { body } = surfaceParts(messages, "checklist-card");
+
+    expect(body.filter((id) => id.startsWith("check-"))).toEqual(["check-0", "check-1"]);
+  });
+
+  it("caps PersonaSelector rows at 40 valid personas", () => {
+    const cache = new ToolResultCache();
+    cache.put("listPersonas", "personas", {
+      personas: Array.from({ length: 50 }, () => ({ id: "general", description: "설명", weights: {} })),
+    });
+    const spec = {
+      intentSummary: "40행 캡",
+      cards: [
+        {
+          cardId: "persona-card",
+          componentType: "PersonaSelector" as const,
+          entityRef: { toolResult: "listPersonas" as const, entityId: "personas" as const },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["persona-card"],
+    };
+
+    const messages = expandComposition(spec, cache);
+    const { body, value } = surfaceParts(messages, "persona-card");
+    const buttonIds = body.filter((id) => id.startsWith("persona-") && !id.endsWith("-desc"));
+
+    expect(buttonIds).toHaveLength(40);
+    expect((value.personas as unknown[]).length).toBe(40);
+  });
 });

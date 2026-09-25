@@ -286,6 +286,51 @@ describe("hidden tail", () => {
     expect(result.hiddenCardIds).toEqual([]);
     expect(result.spec.order).toEqual(["card-a", "card-b"]);
   });
+
+  it("gives a restored hidden card a collision-safe id when its old cardId matches a visible card", () => {
+    const spec = {
+      intentSummary: "x",
+      cards: [
+        {
+          cardId: "card-a",
+          componentType: "BenefitCard" as const,
+          entityRef: { toolResult: "searchBenefits" as const, entityId: "a" },
+          props: {},
+          rationale: "r",
+        },
+      ],
+      order: ["card-a"],
+    };
+    // Entity "b" is hidden and the provider omitted it; its old shell cardId
+    // ("card-a") collides with the still-visible card for a different entity.
+    const hiddenBWithCollidingId = {
+      cards: [
+        { cardId: "card-a", entityId: "b", componentType: "BenefitCard" as const, pinned: false, hidden: true, expanded: false },
+      ],
+    };
+
+    const result = enforceManipulationInvariants(spec, hiddenBWithCollidingId, cache());
+
+    expect(result.hiddenCardIds).toEqual(["hidden-b"]);
+    const restored = result.spec.cards.find((card) => card.cardId === "hidden-b");
+    expect(restored?.entityRef).toEqual({ toolResult: "searchBenefits", entityId: "b" });
+    expect(result.spec.order).toEqual(["card-a", "hidden-b"]);
+    expect(CompositionSpecSchema.safeParse(result.spec).success).toBe(true);
+  });
+
+  it("emits exactly one hidden-tail card when the same semantic key appears hidden twice in current", () => {
+    const duplicateHiddenA = {
+      cards: [
+        { cardId: "card-a", entityId: "a", componentType: "BenefitCard" as const, pinned: false, hidden: true, expanded: false },
+        { cardId: "card-a-dup", entityId: "a", componentType: "BenefitCard" as const, pinned: false, hidden: true, expanded: false },
+      ],
+    };
+
+    const result = enforceManipulationInvariants(twoCardSpec(), duplicateHiddenA, cache());
+
+    expect(result.hiddenCardIds).toEqual(["card-a"]);
+    expect(result.spec.order).toEqual(["card-b", "card-a"]);
+  });
 });
 
 // --- candidate groups (spec rules 6/7, rulings R10/R11) ----------------------
@@ -530,5 +575,26 @@ describe("candidate groups", () => {
 
     expect(out.spec.order).toEqual(["card-p", "score-p", "card-x", "deadlines", "card-r"]);
     expect(out.hiddenCardIds).toEqual(["card-r"]);
+  });
+
+  it("keeps a pinned orphan group (score + checklist only, no BenefitCard) contiguous and ahead of unpinned groups", () => {
+    // Entity "r" never got a BenefitCard from the provider — only score + checklist — yet
+    // pinning one of its sub-cards must still pin the whole (orphan) group as a unit.
+    const spec = composedOf(benefit("p"), score("r"), checklist("r"), deadlines);
+    const current = {
+      cards: [
+        shellRow("score-r", "ScoreBreakdown", "r", { pinned: true }),
+        shellRow("card-p", "BenefitCard", "p"),
+      ],
+    };
+
+    const out = enforceManipulationInvariants(spec, current, groupCache());
+
+    const expected = ["score-r", "checklist-r", "card-p", "deadlines"];
+    expect(out.spec.order).toEqual(expected);
+    expect(out.spec.cards.map((card) => card.cardId)).toEqual(expected);
+
+    const visible = out.spec.cards.map((card) => ({ componentType: card.componentType, entityId: card.entityRef.entityId }));
+    expect(groupedOrderHolds(visible, new Set(["r"]))).toBe(true);
   });
 });

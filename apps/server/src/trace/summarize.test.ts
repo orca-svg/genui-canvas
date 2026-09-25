@@ -109,4 +109,22 @@ describe("summarizeTrace", () => {
     const s = summarizeTrace([ev("checklist.check", "a", { payload: { itemIndex: 90 } })]);
     expect(s.entityEngagement[0]?.checkedItems).toEqual([]);
   });
+
+  it("leaves checkedItems empty when unchecking a row that was never checked", () => {
+    const s = summarizeTrace([ev("checklist.uncheck", "a", { payload: { itemIndex: 5 } })]);
+    expect(s.entityEngagement[0]?.checkedItems).toEqual([]);
+  });
+
+  it("creates no engagement entries when only silent bookkeeping events target an entity", () => {
+    const s = summarizeTrace([
+      ev("session.start", "a", { actor: "system" }),
+      ev("tool.called", "b", {
+        actor: "system",
+        payload: { tools: [{ name: "searchBenefits", calls: 1, failures: 0 }] },
+      }),
+    ]);
+    expect(s.entityEngagement).toEqual([]);
+    expect(s.turnCount).toBe(0);
+    expect(s.recentEvents).toEqual([]);
+  });
 });

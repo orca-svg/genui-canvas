@@ -283,6 +283,78 @@ describe("composeTurn semantic catalog hydration", () => {
       });
     }
   });
+
+  it("marks a hidden card's metadata hidden and leaves a visible card's metadata without the flag", async () => {
+    const benefitA = {
+      id: "benefit-a",
+      title: "혜택 A",
+      provider: "기관",
+      category: "education" as const,
+      summary: "요약 A",
+      assessment: { status: "candidate" as const, constraints: [], missingInfo: [] },
+      ranking: { score: 0.8, breakdown: [] },
+      provenance: [],
+      links: [],
+      freshness: { status: "unknown" as const, observedAt: "2026-07-10T00:00:00.000Z" },
+    };
+    const benefitB = { ...benefitA, id: "benefit-b", title: "혜택 B", summary: "요약 B" };
+    const fakeGateway = {
+      async searchBenefits() {
+        return { results: [benefitA, benefitB] };
+      },
+      async getBenefitDetail() {
+        throw new Error("no detail fixture");
+      },
+      async buildChecklist() {
+        throw new Error("no checklist fixture");
+      },
+      async getUpcomingDeadlines() {
+        return { profile: {}, results: [], generatedAt: "2026-07-10T00:00:00.000Z" };
+      },
+      async listPersonas() {
+        return { personas: [] };
+      },
+    } as unknown as GatewayClient;
+    const twoCardProvider: LlmProvider = {
+      name: "two-card",
+      async compose(req) {
+        const cards = req.candidates.map((candidate) => ({
+          cardId: `card-${candidate.entityId}`,
+          componentType: "BenefitCard",
+          entityRef: { toolResult: "searchBenefits", entityId: candidate.entityId },
+          rationale: "r",
+        }));
+        return { intentSummary: "두 카드", cards, order: cards.map((card) => card.cardId) };
+      },
+    };
+
+    const result = await composeTurn(
+      { gateway: fakeGateway, provider: twoCardProvider },
+      {
+        ...turn,
+        currentComposition: {
+          cards: [
+            {
+              cardId: `card-${benefitA.id}`,
+              entityId: benefitA.id,
+              componentType: "BenefitCard",
+              pinned: false,
+              hidden: true,
+              expanded: false,
+            },
+          ],
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const hiddenMeta = result.cardMetadata.find((m) => m.cardId === `card-${benefitA.id}`);
+    const visibleMeta = result.cardMetadata.find((m) => m.cardId === `card-${benefitB.id}`);
+    expect(hiddenMeta?.hidden).toBe(true);
+    expect(visibleMeta).toBeDefined();
+    expect(visibleMeta).not.toHaveProperty("hidden");
+  });
 });
 
 describe("composeTurn — ledger, hidden tail, sub-cards (live fixture gateway)", () => {
