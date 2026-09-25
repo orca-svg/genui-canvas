@@ -421,10 +421,10 @@ input:disabled {
   outline: 3px solid #2563eb;
   outline-offset: 2px;
 }
-/* The CheckBox sets `outline: none` inline, so the ring is a box-shadow. */
+/* The CheckBox sets `outline: none` inline, so the ring is a box-shadow.
+   (A native checkbox ignores border-radius, so none is set here.) */
 .genui-canvas-card input[type="checkbox"]:focus-visible {
   box-shadow: 0 0 0 3px #2563eb;
-  border-radius: 4px;
 }
 @media (max-width: 48rem) {
   .genui-canvas-card {

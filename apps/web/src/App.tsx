@@ -160,8 +160,14 @@ function mergeShell(prev: ShellState, compositionId: string, cards: CompositionC
   return {
     ...next,
     cards: next.cards.map((c) => {
-      const semanticKey = c.entityId ? `${c.componentType}::${c.entityId}` : undefined;
-      const old = (semanticKey ? semanticFlags.get(semanticKey) : undefined) ?? idFlags.get(c.cardId);
+      // A card with an entityId merges by that semantic key only: the
+      // provider can reuse a positional cardId for a different entity
+      // between turns, and falling back to the cardId here would hand that
+      // unrelated entity's pinned/hidden/expanded/checkedItems to it. The
+      // cardId fallback exists only for cards with no entityId to key on.
+      const old = c.entityId
+        ? semanticFlags.get(`${c.componentType}::${c.entityId}`)
+        : idFlags.get(c.cardId);
       return old
         ? {
             ...c,
@@ -318,12 +324,18 @@ export function App() {
         compositionBaselineRef.current = nextShell;
         setDirty(false);
         clearHistory();
+        // The fallback sentence describes what the user will actually see, so
+        // it counts visible cards only — the hidden tail (cards the server
+        // ships but marks `hidden: true`) doesn't belong in "N개 카드".
+        const visibleCardCount = composition.cards.filter((c) => c.hidden !== true).length;
         const summary =
           intentEvent && intentEvent.kind === "intent"
             ? intentEvent.text
-            : composition.cards.length > 0
-              ? `${composition.cards.length}개 카드를 구성했습니다.`
-              : "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요.";
+            : composition.cards.length === 0
+              ? "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요."
+              : visibleCardCount > 0
+                ? `${visibleCardCount}개 카드를 구성했습니다.`
+                : "보이는 카드가 없습니다. 숨긴 카드는 사이드바에서 다시 볼 수 있습니다.";
         setIntent(hadHistory ? `${summary} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : summary);
         try {
           await enqueueTrace((seq) =>
@@ -405,6 +417,11 @@ export function App() {
   // the canvas action contract and mapped onto the same composition point the
   // sidebar control uses — never executed as-is.
   function handleCanvasAction(action: CanvasActionEvent) {
+    // While a turn is in flight, every canvas action is ignored — including
+    // an invalid one, which would otherwise overwrite the busy status text
+    // with "알 수 없는 카드 동작은 무시했습니다." (`applyPersona` already guards
+    // the valid case on its own).
+    if (busy) return;
     const parsed = CanvasActionSchema.safeParse({ name: action.name, context: action.context });
     if (!parsed.success) {
       setIntent("알 수 없는 카드 동작은 무시했습니다.");
@@ -465,6 +482,11 @@ export function App() {
     pastRef.current = [...pastRef.current.slice(-49), { action, before, after }];
     futureRef.current = [];
     syncHistoryAvailability();
+    // Two manipulations can dispatch within the same JS tick (before React
+    // flushes the first `setShell`), so `shellRef.current` must reflect
+    // `after` right away — the render-time assignment below runs too late
+    // for the second manipulation to see it as `before`.
+    shellRef.current = after;
     setShell(after);
     setDirty(!sameShell(after, compositionBaselineRef.current));
     setIntent(
@@ -517,6 +539,9 @@ export function App() {
     const entry = pastRef.current.pop();
     if (!entry) return;
     futureRef.current.push(entry);
+    // Same same-tick reasoning as `manipulate`: keep the ref current so an
+    // undo/redo/manipulate immediately following in the same tick sees this.
+    shellRef.current = entry.before;
     setShell(entry.before);
     setDirty(!sameShell(entry.before, compositionBaselineRef.current));
     setIntent("마지막 카드 조작을 취소했습니다.");
@@ -529,6 +554,7 @@ export function App() {
     const entry = futureRef.current.pop();
     if (!entry) return;
     pastRef.current.push(entry);
+    shellRef.current = entry.after;
     setShell(entry.after);
     setDirty(!sameShell(entry.after, compositionBaselineRef.current));
     setIntent("취소한 카드 조작을 다시 적용했습니다.");

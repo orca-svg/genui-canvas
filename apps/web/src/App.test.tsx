@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.js";
@@ -11,7 +11,7 @@ function compositionSse(title = "테스트 혜택"): string {
 }
 
 function compositionSseFor(
-  cards: Array<{ entityId: string; title: string; cardId?: string }>,
+  cards: Array<{ entityId: string; title: string; cardId?: string; hidden?: boolean }>,
   includeMetadata = false,
 ): string {
   const messages = cards.flatMap(({ entityId, title, cardId: requestedCardId }) => {
@@ -41,10 +41,11 @@ function compositionSseFor(
     kind: "composition",
     compositionId: "comp-test",
     messages,
-    cards: cards.map(({ entityId, title, cardId }) => ({
+    cards: cards.map(({ entityId, title, cardId, hidden }) => ({
       cardId: cardId ?? `card-${entityId}`,
       entityId,
       componentType: "BenefitCard",
+      ...(hidden ? { hidden: true } : {}),
       ...(includeMetadata
         ? {
             title,
@@ -417,6 +418,59 @@ describe("App", () => {
     );
   });
 
+  it("merges shell rows by entity, not by a reused positional card id", async () => {
+    const turnBodies: Array<Record<string, unknown>> = [];
+    let turnCount = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), { status: 200 });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        turnCount += 1;
+        // Turn 1: only alpha, on card-1. Turn 2: a brand-new entity "beta"
+        // reuses card-1 (the positional id alpha, now pinned, used to own),
+        // and alpha reappears under a different id, card-2.
+        const cards =
+          turnCount === 1
+            ? [{ entityId: "alpha", title: "알파 혜택", cardId: "card-1" }]
+            : [
+                { entityId: "beta", title: "베타 혜택", cardId: "card-1" },
+                { entityId: "alpha", title: "알파 혜택", cardId: "card-2" },
+              ];
+        return new Response(compositionSseFor(cards), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    await screen.findByRole("button", { name: "alpha 고정" });
+    await user.click(screen.getByRole("button", { name: "alpha 고정" }));
+    await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
+
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    expect(await screen.findByRole("button", { name: "alpha 고정 해제" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // beta is a brand-new entity: it must not inherit alpha's pin just
+    // because the provider happened to reuse alpha's old card id for it.
+    expect(screen.getByRole("button", { name: "beta 고정" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("records the query before composition and records the applied result afterwards", async () => {
     const calls: string[] = [];
     const eventBodies: Array<Record<string, unknown>> = [];
@@ -467,6 +521,72 @@ describe("App", () => {
       type: "composition.applied",
       context: { compositionId: "comp-test" },
     });
+  });
+
+  it("counts only the visible cards in the status fallback sentence", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), { status: 200 });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        // No "intent" frame: the client falls back to counting cards itself.
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택" },
+            { entityId: "beta", title: "두 번째 혜택", hidden: true },
+            { entityId: "gamma", title: "세 번째 혜택" },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("2개 카드를 구성했습니다."),
+    );
+  });
+
+  it("explains when a composition arrives with every card hidden", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), { status: 200 });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택", hidden: true },
+            { entityId: "beta", title: "두 번째 혜택", hidden: true },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "보이는 카드가 없습니다. 숨긴 카드는 사이드바에서 다시 볼 수 있습니다.",
+      ),
+    );
   });
 
   it("keeps a successful composition applied when only its audit event fails", async () => {
@@ -701,6 +821,58 @@ describe("App", () => {
       "card.reorder",
       "card.pin",
     ]);
+  });
+
+  it("applies two manipulations dispatched in the same tick without losing either", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택" },
+            { entityId: "beta", title: "두 번째 혜택" },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
+
+    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
+    const hideAlpha = screen.getByRole("button", { name: "alpha 숨기기" });
+    // fireEvent.click flushes (and re-renders) after every call, so it cannot
+    // reproduce two manipulations landing in the same JS tick. A raw DOM
+    // click inside one `act` batch does: React queues both state updates
+    // without a render in between, which is what exposed the stale-`before`
+    // bug in `manipulate`.
+    act(() => {
+      pinBeta.click();
+      hideAlpha.click();
+    });
+
+    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "alpha 다시 보기" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("keeps the previous composition and explains how to recover when a turn fails", async () => {
