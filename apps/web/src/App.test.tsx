@@ -584,7 +584,7 @@ describe("App", () => {
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "보이는 카드가 없습니다. 숨긴 카드는 사이드바에서 다시 볼 수 있습니다.",
+        "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.",
       ),
     );
   });
@@ -873,6 +873,58 @@ describe("App", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  it("carries a same-tick manipulation into a scenario selection's turn trigger", async () => {
+    const turnBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/session")) {
+        return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/events")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/api/turn")) {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          compositionSseFor([
+            { entityId: "alpha", title: "첫 번째 혜택" },
+            { entityId: "beta", title: "두 번째 혜택" },
+          ]),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
+    await waitFor(() => expect(turnBodies).toHaveLength(1));
+
+    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
+    const secondScenario = screen.getByRole("button", { name: "청년 구직자" });
+    // Same same-tick reasoning as the manipulation test above: a raw click
+    // inside one `act` batch pins beta and selects the second scenario
+    // before React re-renders, so `selectScenario` sees the manipulation
+    // only if it reads `shellRef.current` rather than the render closure's
+    // (stale) `shell`.
+    act(() => {
+      pinBeta.click();
+      secondScenario.click();
+    });
+
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    const secondTurnCards = (
+      turnBodies[1]!.currentComposition as { cards: Array<{ entityId?: string; pinned?: boolean }> }
+    ).cards;
+    expect(secondTurnCards.find((card) => card.entityId === "beta")?.pinned).toBe(true);
   });
 
   it("keeps the previous composition and explains how to recover when a turn fails", async () => {

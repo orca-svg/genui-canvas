@@ -212,6 +212,17 @@ export function App() {
     canRedo: false,
   });
 
+  // The one writer for shell state: keeps `shellRef` current at the moment of
+  // the write itself, not only at the render-time assignment above (which
+  // only runs on the *next* render). Every place that changes the shell — a
+  // composed turn landing, a manipulation, an undo, a redo — commits through
+  // here so a same-tick reader (e.g. `selectScenario`/`submitQuery` reading
+  // `shellRef.current`) always sees the latest shell.
+  function commitShell(next: ShellState) {
+    shellRef.current = next;
+    setShell(next);
+  }
+
   // The canvas follows the shell instantly: shell order (pinned first), hidden
   // cards dropped, expanded flag passed through — no server round-trip.
   const layout = shell.cards
@@ -320,7 +331,7 @@ export function App() {
       if (composition && composition.kind === "composition") {
         const nextShell = mergeShell(current, composition.compositionId, composition.cards);
         setMessages(composition.messages as unknown as A2uiMessages);
-        setShell(nextShell);
+        commitShell(nextShell);
         compositionBaselineRef.current = nextShell;
         setDirty(false);
         clearHistory();
@@ -335,7 +346,7 @@ export function App() {
               ? "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요."
               : visibleCardCount > 0
                 ? `${visibleCardCount}개 카드를 구성했습니다.`
-                : "보이는 카드가 없습니다. 숨긴 카드는 사이드바에서 다시 볼 수 있습니다.";
+                : "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.";
         setIntent(hadHistory ? `${summary} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : summary);
         try {
           await enqueueTrace((seq) =>
@@ -390,7 +401,7 @@ export function App() {
     scenarioRef.current = scenario;
     setQuery(scenario.query);
     if (typeof scenario.profile.persona === "string") setPersona(scenario.profile.persona);
-    void runTurn(scenario, shell);
+    void runTurn(scenario, shellRef.current);
   }
 
   function applyPersona(personaId: string) {
@@ -470,7 +481,7 @@ export function App() {
       profile: { persona },
     };
     scenarioRef.current = next;
-    void runTurn(next, shell);
+    void runTurn(next, shellRef.current);
   }
 
   // Fine-grained manipulation: applies instantly in the shell (the canvas
@@ -485,11 +496,11 @@ export function App() {
     futureRef.current = [];
     syncHistoryAvailability();
     // Two manipulations can dispatch within the same JS tick (before React
-    // flushes the first `setShell`), so `shellRef.current` must reflect
-    // `after` right away — the render-time assignment below runs too late
-    // for the second manipulation to see it as `before`.
-    shellRef.current = after;
-    setShell(after);
+    // flushes the first shell update), so `shellRef.current` must reflect
+    // `after` right away — the render-time assignment above runs too late
+    // for the second manipulation to see it as `before`. `commitShell` is
+    // the one writer that keeps the ref and the state in sync.
+    commitShell(after);
     setDirty(!sameShell(after, compositionBaselineRef.current));
     setIntent(
       action.type.startsWith("checklist.")
@@ -541,10 +552,10 @@ export function App() {
     const entry = pastRef.current.pop();
     if (!entry) return;
     futureRef.current.push(entry);
-    // Same same-tick reasoning as `manipulate`: keep the ref current so an
-    // undo/redo/manipulate immediately following in the same tick sees this.
-    shellRef.current = entry.before;
-    setShell(entry.before);
+    // Same same-tick reasoning as `manipulate`: commitShell keeps the ref
+    // current so an undo/redo/manipulate immediately following in the same
+    // tick sees this.
+    commitShell(entry.before);
     setDirty(!sameShell(entry.before, compositionBaselineRef.current));
     setIntent("마지막 카드 조작을 취소했습니다.");
     syncHistoryAvailability();
@@ -556,8 +567,7 @@ export function App() {
     const entry = futureRef.current.pop();
     if (!entry) return;
     pastRef.current.push(entry);
-    shellRef.current = entry.after;
-    setShell(entry.after);
+    commitShell(entry.after);
     setDirty(!sameShell(entry.after, compositionBaselineRef.current));
     setIntent("취소한 카드 조작을 다시 적용했습니다.");
     syncHistoryAvailability();
