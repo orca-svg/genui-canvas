@@ -45,7 +45,7 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | Trace bookkeeping | `session.start` at seq 0, one `tool.called` per turn, `nextSeq` on terminal events, client events continue the server sequence, bookkeeping rows excluded from the provider's recent history. |
 | Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
 | Model boundary | Prompt contains no raw query, title, summary, URL, or profile string; only safe semantic projection; strict structured output and hallucinated references are rejected; the streamed intent sentence passes the same markup/URL and definitive-eligibility rule as card rationales or is omitted. |
-| Manipulation invariants | Hidden cards never enter the visible order but ship in a hidden tail the shell can unhide; pinned cards cannot be dropped/buried; explicit reorder survives; the visible order is grouped by candidate on every composition (`PersonaSelector` first, pinned groups next, fixed `BenefitCard → ScoreBreakdown → Checklist → SourceNotice` inside a group, `DeadlineList` last regardless of pin state — pinning it only guarantees it stays present); expanded → Checklist+SourceNotice, pinned → ScoreBreakdown, ticked rows keep Checklist; deterministic expansion preserves trusted tool data. |
+| Manipulation invariants | Hidden cards never enter the visible order but ship in a hidden tail the shell can unhide; pinned cards cannot be dropped/buried; explicit reorder survives; the visible order is grouped by candidate (`PersonaSelector` first, pinned groups next, fixed `BenefitCard → ScoreBreakdown → Checklist → SourceNotice` inside a group) — `enforce.test.ts`'s `candidate groups` suite proves this per-composition, and the CI replay's `groupedOrderPreserved` proves it holds on both the control and the manipulated composition of a live turn pair; `DeadlineList` last regardless of pin state (pinning it only guarantees it stays present) is proven by `enforce.test.ts`'s "keeps a pinned DeadlineList present but still last even though the provider led with it" and "restores a pinned DeadlineList the provider omitted entirely, placing it last" — the replay's fixture never pins `DeadlineList`, so it doesn't exercise that case; expanded → Checklist+SourceNotice, pinned → ScoreBreakdown, ticked rows keep Checklist; deterministic expansion preserves trusted tool data. |
 | Trust copy | Scores say “relative relevance, not eligibility probability”; `conflict_detected` remains a candidate-level verification warning; source health/freshness and non-adjudication caveats remain visible; no definitive eligibility wording. |
 | CI replay | Actual session→event→turn routes persist the full eleven-event sequence (including `session.start` and `tool.called` bookkeeping rows) and the second provider request observes server-derived pin/hide/reorder/expand signals. |
 
@@ -131,7 +131,13 @@ Required manual/browser checks:
    leaves existing cards visible and provides a recovery instruction.
 5. Canvas buttons are at least 44 CSS pixels tall (`min-height: 2.75rem`) at
    the mobile breakpoint; the CheckBox box grows to 24 CSS pixels there
-   (`1.5rem`, up from 20 CSS pixels on desktop).
+   (`1.5rem`, up from 20 CSS pixels on desktop). Sidebar controls meet the
+   same 44-CSS-pixel (`2.75rem`) target at that breakpoint: scenario buttons,
+   the search input and its button, and the persona `select` get
+   `min-height: 2.75rem`, and each card's action buttons
+   (`[data-slot="attachment-action"]`) and the source link get both
+   `min-width` and `min-height: 2.75rem` (`styles.css`'s
+   `@media (max-width: 48rem)` block).
 6. Long Korean titles, URLs, caveats, and 200% text spacing do not overlap or
    become inaccessible.
 7. Reduced-motion preference removes non-essential transitions.

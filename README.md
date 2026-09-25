@@ -168,12 +168,18 @@ session.start → query.submit → tool.called → composition.applied
 It fails unless the pinned card moves first, the hidden card leaves the
 visible order, the order changes, the trace closes the loop, and the second
 composition contains `Checklist` and `SourceNotice` for the expanded
-candidate and `ScoreBreakdown` for the pinned one (`subCardsComposed`), laid
-out by candidate group on every composition, not only this second one: each
-candidate's cards stay together in the fixed `BenefitCard → ScoreBreakdown →
-Checklist → SourceNotice` order, pinned groups come first and `DeadlineList`
-last even when pinned (`groupedOrderPreserved`). To investigate a locally
-configured model separately (not a CI/reproduction gate):
+candidate and `ScoreBreakdown` for the pinned one (`subCardsComposed`).
+`groupedOrderPreserved` checks the candidate-group layout of *both*
+compositions, not only the second: each candidate's cards stay together in
+the fixed `BenefitCard → ScoreBreakdown → Checklist → SourceNotice` order,
+with pinned groups first — the control composition (nothing pinned yet) and
+the manipulated one (the pinned entity) each have to hold that shape. A
+pinned `DeadlineList` staying present yet still last isn't something this
+replay exercises (the fixture never pins it); `enforce.test.ts`'s "keeps a
+pinned DeadlineList present but still last even though the provider led
+with it" and "restores a pinned DeadlineList the provider omitted entirely,
+placing it last" cover that case. To investigate a locally configured model
+separately (not a CI/reproduction gate):
 
 ```bash
 pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
