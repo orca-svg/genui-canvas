@@ -73,6 +73,24 @@ describe("ServerEventSchema", () => {
     expect(ServerEventSchema.safeParse({ kind: "error", message: "구성 실패" }).success).toBe(true);
   });
 
+  it("accepts nextSeq: 0 as a valid boundary, not a falsy omission", () => {
+    expect(ServerEventSchema.safeParse({ kind: "error", message: "x", nextSeq: 0 }).success).toBe(true);
+    expect(
+      ServerEventSchema.safeParse({ kind: "composition", compositionId: "comp2", messages: [], nextSeq: 0 })
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts itemCount: 0 on a card with no checklist rows yet", () => {
+    const event = {
+      kind: "composition",
+      compositionId: "comp2",
+      messages: [],
+      cards: [{ cardId: "c1", componentType: "Checklist", entityId: "a", itemCount: 0 }],
+    };
+    expect(ServerEventSchema.safeParse(event).success).toBe(true);
+  });
+
   it("rejects an unknown event kind", () => {
     expect(ServerEventSchema.safeParse({ kind: "explode" }).success).toBe(false);
   });
@@ -122,6 +140,15 @@ describe("interactive A2UI subset", () => {
     ).toBe(false);
     expect(
       CanvasActionSchema.safeParse({ name: "persona.select", context: { personaId: "senior" } }).success,
+    ).toBe(true);
+  });
+
+  it("accepts an empty children array on Column and Row", () => {
+    expect(
+      A2uiMessageSchema.safeParse(update([{ id: "col", component: "Column", children: [] }])).success,
+    ).toBe(true);
+    expect(
+      A2uiMessageSchema.safeParse(update([{ id: "row", component: "Row", children: [] }])).success,
     ).toBe(true);
   });
 

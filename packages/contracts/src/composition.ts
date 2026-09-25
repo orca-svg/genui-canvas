@@ -174,7 +174,7 @@ export const EntityEngagementSchema = z.object({
   pinned: z.boolean(),
   hidden: z.boolean(),
   expandCount: z.number().int().nonnegative().max(10_000),
-  /** Sorted unique checklist rows the user ticked; derived from the trace, never stored elsewhere. */
+  /** The server emits them sorted and unique; the schema only bounds each index. */
   checkedItems: z.array(ChecklistItemIndexSchema).max(CHECKLIST_MAX_ITEMS),
   lastAction: z.string().max(64).optional(),
 }).strict();

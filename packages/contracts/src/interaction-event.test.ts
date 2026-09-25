@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   InteractionEventSchema,
+  InteractionEventTypeSchema,
   createInteractionEvent,
   type InteractionEventInput,
+  type InteractionEventType,
 } from "./interaction-event.js";
 
 const baseInput: InteractionEventInput = {
@@ -39,33 +41,56 @@ describe("InteractionEventSchema", () => {
     expect(InteractionEventSchema.safeParse(event).success).toBe(false);
   });
 
-  it("accepts every declared event type", () => {
-    const types = [
-      "card.pin", "card.unpin", "card.hide", "card.unhide",
-      "card.expand", "card.collapse", "card.reorder",
-      "checklist.check", "checklist.uncheck",
-      "query.submit", "persona.switch",
-      "composition.applied", "composition.rejected", "tool.called", "session.start",
-    ] as const;
-    for (const type of types) {
-      const actor =
-        type.startsWith("card.") || type.startsWith("checklist.") || type === "query.submit" || type === "persona.switch"
-          ? "user"
-          : "system";
-      const payload =
-        type === "query.submit"
-          ? { text: "서울 청년 지원" }
-          : type === "persona.switch"
-            ? { personaId: "youth_jobseeker" }
-            : type === "card.reorder"
-              ? { toIndex: 0 }
-              : type === "checklist.check" || type === "checklist.uncheck"
-                ? { itemIndex: 0 }
-                : type === "composition.rejected"
-                  ? { reason: "turn_failed" }
-                  : type === "tool.called"
-                    ? { tools: [{ name: "searchBenefits", calls: 1, failures: 0 }] }
-                    : undefined;
+  // Explicit, hand-maintained — deliberately not derived from the production
+  // startsWith() rule in interaction-event.ts, so this table can't just restate
+  // whatever the implementation already does. The keys-match assertion below
+  // fails the test the moment a new InteractionEventType is declared without an
+  // entry here, instead of silently skipping it.
+  const EXPECTED_ACTOR_BY_TYPE: Record<InteractionEventType, "user" | "system"> = {
+    "card.pin": "user",
+    "card.unpin": "user",
+    "card.hide": "user",
+    "card.unhide": "user",
+    "card.expand": "user",
+    "card.collapse": "user",
+    "card.reorder": "user",
+    "checklist.check": "user",
+    "checklist.uncheck": "user",
+    "query.submit": "user",
+    "persona.switch": "user",
+    "composition.applied": "system",
+    "composition.rejected": "system",
+    "tool.called": "system",
+    "session.start": "system",
+  };
+
+  function payloadFor(type: InteractionEventType) {
+    switch (type) {
+      case "query.submit":
+        return { text: "서울 청년 지원" };
+      case "persona.switch":
+        return { personaId: "youth_jobseeker" };
+      case "card.reorder":
+        return { toIndex: 0 };
+      case "checklist.check":
+      case "checklist.uncheck":
+        return { itemIndex: 0 };
+      case "composition.rejected":
+        return { reason: "turn_failed" as const };
+      case "tool.called":
+        return { tools: [{ name: "searchBenefits" as const, calls: 1, failures: 0 }] };
+      default:
+        return undefined;
+    }
+  }
+
+  it("declares an expected actor for every InteractionEventType (fails if a new type is added without one)", () => {
+    expect(Object.keys(EXPECTED_ACTOR_BY_TYPE).sort()).toEqual([...InteractionEventTypeSchema.options].sort());
+  });
+
+  it("accepts every declared event type when paired with its expected actor", () => {
+    for (const [type, actor] of Object.entries(EXPECTED_ACTOR_BY_TYPE) as [InteractionEventType, "user" | "system"][]) {
+      const payload = payloadFor(type);
       expect(() =>
         InteractionEventSchema.parse(createInteractionEvent({ ...baseInput, actor, type, payload })),
       ).not.toThrow();
@@ -136,6 +161,16 @@ describe("checklist and server bookkeeping events", () => {
       type: "checklist.check",
       target: checklistTarget,
       payload: { itemIndex: 2 },
+    });
+    expect(InteractionEventSchema.safeParse(event).success).toBe(true);
+  });
+
+  it("accepts a checklist row index at the top of the valid range (89)", () => {
+    const event = createInteractionEvent({
+      ...baseInput,
+      type: "checklist.check",
+      target: checklistTarget,
+      payload: { itemIndex: 89 },
     });
     expect(InteractionEventSchema.safeParse(event).success).toBe(true);
   });
