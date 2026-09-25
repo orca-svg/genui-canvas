@@ -28,13 +28,16 @@ export interface EnforcedComposition {
  * first, and an explicit reorder survives the next composition. A non-compliant
  * provider cannot undo these user actions.
  *
- * The visible order is built from candidate groups (spec rules 6/7): a
- * PersonaSelector first, then each candidate's BenefitCard with its sub-cards in
- * the fixed BenefitCard → ScoreBreakdown → Checklist → SourceNotice order —
- * pinned groups first, then the user's order when they reordered, then the
- * provider's — then sub-cards left without a visible BenefitCard, and
- * DeadlineList last. `spec.cards` is returned in `spec.order`, so every consumer
- * (wire card list, A2UI messages, metadata) sees one order.
+ * Every composition's visible order is built from candidate groups (spec
+ * rules 6/7) — not only a turn where something was pinned, hidden, or
+ * reordered — so a non-compliant provider's scattered cards are regrouped on
+ * the very first query: a PersonaSelector first, then each candidate's
+ * BenefitCard with its sub-cards in the fixed BenefitCard → ScoreBreakdown →
+ * Checklist → SourceNotice order — pinned groups first, then the user's order
+ * when they reordered, then the provider's — then sub-cards left without a
+ * visible BenefitCard, and DeadlineList last. `spec.cards` is returned in
+ * `spec.order`, so every consumer (wire card list, A2UI messages, metadata)
+ * sees one order.
  */
 export function enforceManipulationInvariants(
   spec: CompositionSpec,
@@ -73,9 +76,6 @@ export function enforceManipulationInvariants(
       card.entityId &&
       !(card.componentType !== "BenefitCard" && hiddenEntityIds.has(card.entityId)),
   );
-  if (pinned.length === 0 && hiddenKeys.size === 0 && !userReordered) {
-    return { spec: { ...spec, cards: inOrder(spec.cards, spec.order) }, hiddenCardIds: [] };
-  }
 
   const cards: CardSpec[] = [...visibleSpecCards];
   const bySemanticRef = new Map<string, CardSpec>();
@@ -159,8 +159,8 @@ const GROUP_RANK: Partial<Record<CatalogComponentType, number>> = {
  * any card of a group pins the group, in the order the pinned rows appear) →
  * the remaining groups with a visible BenefitCard (the user's BenefitCard row
  * order when they reordered, otherwise the provider position of the group's
- * first card) → sub-cards without a visible BenefitCard (provider order) →
- * DeadlineList.
+ * first card) → sub-cards without a visible BenefitCard (grouped per entity,
+ * entities by first appearance) → DeadlineList.
  */
 function groupedVisibleOrder(
   cards: readonly CardSpec[],
@@ -220,7 +220,7 @@ function groupedVisibleOrder(
     ...inProviderOrder.filter((card) => card.componentType === "PersonaSelector"),
     ...pinnedEntities.flatMap((entityId) => groups.get(entityId) ?? []),
     ...anchored.flatMap((entityId) => groups.get(entityId) ?? []),
-    ...inProviderOrder.filter((card) => isGrouped(card) && orphanEntities.has(card.entityRef.entityId)),
+    ...unpinned.filter((entityId) => orphanEntities.has(entityId)).flatMap((entityId) => groups.get(entityId) ?? []),
   ];
   const placed = new Set(ordered.map((card) => card.cardId));
   const trailing = inProviderOrder.filter((card) => card.componentType === "DeadlineList");

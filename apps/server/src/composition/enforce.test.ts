@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { CompositionSpecSchema } from "@genui-canvas/contracts";
 import { ToolResultCache } from "./tool-cache.js";
 import { enforceManipulationInvariants } from "./enforce.js";
+import { groupedOrderHolds } from "../demo/manipulation-check.js";
 
 const summary = (id: string) => ({
   id,
@@ -455,13 +456,34 @@ describe("candidate groups", () => {
     ]);
   });
 
-  it("keeps sub-cards without a visible BenefitCard after the groups in provider order", () => {
+  it("regroups a non-compliant provider's scattered sub-cards on an unmanipulated turn", () => {
+    const spec = composedOf(score("a"), deadlines, benefit("b"), benefit("a"), checklist("b"));
+    const out = enforceManipulationInvariants(spec, { cards: [] }, groupCache());
+    expect(out.hiddenCardIds).toEqual([]);
+    expect(out.spec.order).toEqual(["card-a", "score-a", "card-b", "checklist-b", "deadlines"]);
+    expect(out.spec.cards.map((card) => card.cardId)).toEqual(out.spec.order);
+  });
+
+  it("keeps sub-cards without a visible BenefitCard after the groups, grouped per entity in the fixed in-group order", () => {
     const spec = composedOf(source("r"), benefit("x"), checklist("r"), deadlines);
     const current = { cards: [shellRow("card-x", "BenefitCard", "x", { expanded: true })] };
 
     const out = enforceManipulationInvariants(spec, current, groupCache(), true);
 
-    expect(out.spec.order).toEqual(["card-x", "source-r", "checklist-r", "deadlines"]);
+    expect(out.spec.order).toEqual(["card-x", "checklist-r", "source-r", "deadlines"]);
+  });
+
+  it("groups interleaved orphan sub-cards per entity, entities in provider first-appearance order", () => {
+    const spec = composedOf(benefit("x"), source("r"), checklist("s"), checklist("r"), source("s"), deadlines);
+    const out = enforceManipulationInvariants(spec, { cards: [] }, groupCache());
+    expect(out.spec.order).toEqual(["card-x", "checklist-r", "source-r", "checklist-s", "source-s", "deadlines"]);
+  });
+
+  it("produces an order the replay's groupedOrderHolds accepts even with orphan sub-cards", () => {
+    const spec = composedOf(benefit("x"), source("r"), checklist("s"), checklist("r"), source("s"), deadlines);
+    const out = enforceManipulationInvariants(spec, { cards: [] }, groupCache());
+    const visible = out.spec.cards.map((card) => ({ componentType: card.componentType, entityId: card.entityRef.entityId }));
+    expect(groupedOrderHolds(visible, new Set())).toBe(true);
   });
 
   it("orders unpinned groups by the user's BenefitCard rows, then new candidates by provider order", () => {
