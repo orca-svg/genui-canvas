@@ -173,13 +173,17 @@ input:disabled {
   padding: 0.75rem;
 }
 
+/* A slot with no hint text keeps its grid cell (so columns stay aligned) but
+   draws nothing; only hint-bearing slots show the dashed placeholder. */
+.genui-canvas-slot--empty:empty {
+  border: 0;
+  min-height: 0;
+  padding: 0;
+}
+
 @media (max-width: 48rem) {
   .genui-canvas-row {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .genui-canvas-slot--empty:empty {
-    display: none;
   }
 }
 
