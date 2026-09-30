@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CatalogComponentTypeSchema } from "./catalog.js";
 import { RecommendationPersonaSchema } from "./gateway.js";
 import {
+  ChecklistItemIndexSchema,
   OpaqueEntityIdSchema,
   OpaqueIdentifierSchema,
   UserQueryTextSchema,
@@ -24,6 +25,9 @@ export const InteractionEventTypeSchema = z.enum([
   "card.expand",
   "card.collapse",
   "card.reorder",
+  // checklist preparation memo (deterministic, instant, trace-only)
+  "checklist.check",
+  "checklist.uncheck",
   // composition points (LLM triggers)
   "query.submit",
   "persona.switch",
@@ -35,12 +39,40 @@ export const InteractionEventTypeSchema = z.enum([
 ]);
 export type InteractionEventType = z.infer<typeof InteractionEventTypeSchema>;
 
+/** Gateway tools the server may call during one composition point. */
+export const GATEWAY_TOOL_NAMES = [
+  "searchBenefits",
+  "getBenefitDetail",
+  "buildChecklist",
+  "getUpcomingDeadlines",
+  "listPersonas",
+] as const;
+export const GatewayToolNameSchema = z.enum(GATEWAY_TOOL_NAMES);
+export type GatewayToolName = z.infer<typeof GatewayToolNameSchema>;
+
+/** One row of the per-turn tool ledger the server records as `tool.called`. */
+export const ToolCallSummarySchema = z
+  .object({
+    name: GatewayToolNameSchema,
+    calls: z.number().int().nonnegative().max(1000),
+    failures: z.number().int().nonnegative().max(1000),
+  })
+  .strict();
+export type ToolCallSummary = z.infer<typeof ToolCallSummarySchema>;
+
+const ChecklistTogglePayloadSchema = z.object({ itemIndex: ChecklistItemIndexSchema }).strict();
+
 const PayloadSchemaByType = {
   "card.reorder": z.object({ toIndex: z.number().int().nonnegative().max(99) }).strict(),
+  "checklist.check": ChecklistTogglePayloadSchema,
+  "checklist.uncheck": ChecklistTogglePayloadSchema,
   "query.submit": z.object({ text: UserQueryTextSchema }).strict(),
   "persona.switch": z.object({ personaId: RecommendationPersonaSchema }).strict(),
   "composition.rejected": z
     .object({ reason: z.enum(["turn_failed", "composition_invalid"]) })
+    .strict(),
+  "tool.called": z
+    .object({ tools: z.array(ToolCallSummarySchema).min(1).max(GATEWAY_TOOL_NAMES.length) })
     .strict(),
 } as const;
 
@@ -93,6 +125,7 @@ export const InteractionEventSchema = InteractionEventBaseSchema.superRefine((ev
 
   const userEvent =
     event.type.startsWith("card.") ||
+    event.type.startsWith("checklist.") ||
     event.type === "query.submit" ||
     event.type === "persona.switch";
   const expectedActor = userEvent ? "user" : "system";

@@ -1,6 +1,6 @@
 import { createInteractionEvent } from "@genui-canvas/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSession, postEvent, postTurn } from "./client.js";
+import { SequenceConflictError, createSession, postEvent, postTurn } from "./client.js";
 
 const EVENT = createInteractionEvent({
   sessionId: "11111111-1111-4111-8111-111111111111",
@@ -27,6 +27,35 @@ describe("createSession", () => {
     );
     await expect(createSession()).rejects.toThrow();
   });
+
+  it("reads the server-issued next sequence and defaults it to zero when absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ sessionId: "11111111-1111-4111-8111-111111111111", nextSeq: 1 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    await expect(createSession()).resolves.toEqual({
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      nextSeq: 1,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ sessionId: "11111111-1111-4111-8111-111111111111" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    await expect(createSession()).resolves.toEqual({
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      nextSeq: 0,
+    });
+  });
 });
 
 describe("postEvent", () => {
@@ -48,6 +77,35 @@ describe("postEvent", () => {
 
     await expect(postEvent(EVENT)).rejects.toThrow("HTTP 409");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the server's next sequence on a sequence conflict without retrying", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: "Event sequence conflict", nextSeq: 5 }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await postEvent(EVENT).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SequenceConflictError);
+    expect((error as SequenceConflictError).nextSeq).toBe(5);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["an identity conflict", { ok: false, error: "Event identity conflict" }],
+    ["a malformed next sequence", { ok: false, error: "Event sequence conflict", nextSeq: -1 }],
+    ["a fractional next sequence", { ok: false, error: "Event sequence conflict", nextSeq: 1.5 }],
+  ])("keeps %s a plain HTTP 409 error", async (_case, body) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 409 })),
+    );
+    const error = await postEvent(EVENT).catch((caught: unknown) => caught);
+    expect(error).not.toBeInstanceOf(SequenceConflictError);
+    expect(String(error)).toContain("HTTP 409");
   });
 });
 

@@ -10,3 +10,17 @@ export const OpaqueIdentifierSchema = z
 
 /** Opaque gateway identifiers are data keys, never a free-text prompt channel. */
 export const OpaqueEntityIdSchema = OpaqueIdentifierSchema;
+
+/**
+ * Upper bound of dynamic rows one card renders (checklist rows, deadline rows,
+ * score dimensions). Chosen so a body Column with its fixed heading/divider/
+ * caveat children stays under the wire limit of 100 children.
+ */
+export const CHECKLIST_MAX_ITEMS = 90;
+
+/** Index of one checklist row inside a single Checklist card. */
+export const ChecklistItemIndexSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(CHECKLIST_MAX_ITEMS - 1);

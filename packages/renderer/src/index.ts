@@ -3,5 +3,13 @@ export {
   CanvasSurfaces,
   type CanvasSurfacesProps,
   type CanvasCardLayout,
+  type CanvasWatch,
+  type CanvasValue,
+  type CanvasValueChange,
 } from "./CanvasSurfaces.js";
-export { createProcessor, type A2uiMessages } from "./processor.js";
+export {
+  createProcessor,
+  type A2uiMessages,
+  type CanvasActionEvent,
+  type CanvasActionHandler,
+} from "./processor.js";

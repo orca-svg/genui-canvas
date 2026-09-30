@@ -19,7 +19,12 @@ export function deriveInteractionEvent(
   meta: EventMeta,
 ): InteractionEvent {
   const card = stateBefore.cards.find((c) => c.cardId === action.cardId);
-  const payload = action.type === "card.reorder" ? { toIndex: action.toIndex } : undefined;
+  const payload =
+    action.type === "card.reorder"
+      ? { toIndex: action.toIndex }
+      : action.type === "checklist.check" || action.type === "checklist.uncheck"
+        ? { itemIndex: action.itemIndex }
+        : undefined;
 
   return createInteractionEvent({
     sessionId: meta.sessionId,

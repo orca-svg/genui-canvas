@@ -38,6 +38,21 @@ immediate control over the resulting canvas.
   even when a provider ignores the user's manipulation.
 - Failed recomposition keeps the previous canvas and records a
   `composition.rejected` event when the trace endpoint remains available.
+- Engagement changes what the next composition contains, not only its order:
+  an expanded candidate gains its `Checklist` and `SourceNotice`, a pinned
+  candidate gains its `ScoreBreakdown`, ticked checklist rows keep the
+  `Checklist`, a persona switch puts a `PersonaSelector` first, and dated
+  deadlines add a `DeadlineList`. The key-free rule-based provider follows
+  exactly these rules, so `pnpm verify` proves them without a model key.
+- Checklist ticks are a local preparation memo. They are applied instantly,
+  recorded as `checklist.check` / `checklist.uncheck` events carrying only the
+  row index, and re-applied on the next composition from the server-derived
+  trace, also when a `Checklist` returns after dropping out of a composition.
+  They are never an application state.
+- A hidden candidate stays in the shell as a hidden row after recomposition,
+  so "다시 보기" works without a round-trip. Compositions themselves are not
+  undoable; the undo history restarts at each composition point and the
+  status line says so.
 
 The model does not write markup or URLs. It sees only opaque IDs, enums, ranks,
 relative scores, allowed component references, and bounded trace flags. Raw
@@ -52,15 +67,19 @@ the model instruction channel and are joined after strict validation.
 | `ScoreBreakdown` | `searchBenefits` | Transparent relative-ranking dimensions |
 | `Checklist` | `buildChecklist` | Required/optional preparation items and caveats |
 | `DeadlineList` | `getUpcomingDeadlines` | Dated candidate deadlines with uncertainty intact |
-| `PersonaSelector` | `listPersonas` | Visible ranking-weight presets; never an eligibility switch |
+| `PersonaSelector` | `listPersonas` | Buttons that switch the visible ranking-weight preset through the normal `persona.switch` composition point; never an eligibility switch |
 | `SourceNotice` | `getBenefitDetail` | Source observation, freshness, verified-link health, and user-verification notice |
 
-The deterministic expander emits only A2UI v0.9 `Column` and `Text` primitives.
-The wire contract rejects unknown catalogs/components before rendering, and all
-display text is HTML-escaped. The repository intentionally pins v0.9 because
-that is what its installed renderer supports; [A2UI v0.9.1 is the current
-production release](https://a2ui.org/), so an upgrade requires an explicit
-cross-package protocol test.
+The deterministic expander emits a bounded A2UI v0.9 basic-catalog subset:
+`Card`, `Column`, `Row`, `Divider`, `Text`, plus exactly two interactive
+primitives — `Button` whose action must be a named canvas action
+(`persona.select` with a gateway persona id) and `CheckBox` bound to a
+per-row boolean path. The wire contract rejects any other component, action
+name, or literal value before rendering, and all display text is
+HTML-escaped. The repository intentionally pins v0.9 because that is what its
+installed renderer supports; [A2UI v0.9.1 is the current production
+release](https://a2ui.org/), so an upgrade requires an explicit cross-package
+protocol test.
 
 ## Architecture
 
@@ -141,13 +160,26 @@ Hono session, event, and turn routes, persists this sequence, and checks that
 the second provider request received the server-derived summary:
 
 ```text
-query.submit → composition.applied → card.pin → card.hide
-→ card.reorder → card.expand → query.submit → composition.applied
+session.start → query.submit → tool.called → composition.applied
+→ card.pin → card.hide → card.reorder → card.expand
+→ query.submit → tool.called → composition.applied
 ```
 
-It fails unless the pinned card moves first, the hidden card stays absent, the
-order changes, and the trace closes the loop. To investigate a locally
-configured model separately (not a CI/reproduction gate):
+It fails unless the pinned card moves first, the hidden card leaves the
+visible order, the order changes, the trace closes the loop, and the second
+composition contains `Checklist` and `SourceNotice` for the expanded
+candidate and `ScoreBreakdown` for the pinned one (`subCardsComposed`).
+`groupedOrderPreserved` checks the candidate-group layout of *both*
+compositions, not only the second: each candidate's cards stay together in
+the fixed `BenefitCard → ScoreBreakdown → Checklist → SourceNotice` order,
+with pinned groups first — the control composition (nothing pinned yet) and
+the manipulated one (the pinned entity) each have to hold that shape. A
+pinned `DeadlineList` staying present yet still last isn't something this
+replay exercises (the fixture never pins it); `enforce.test.ts`'s "keeps a
+pinned DeadlineList present but still last even though the provider led
+with it" and "restores a pinned DeadlineList the provider omitted entirely,
+placing it last" cover that case. To investigate a locally configured model
+separately (not a CI/reproduction gate):
 
 ```bash
 pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
@@ -157,8 +189,15 @@ pnpm --filter @genui-canvas/server demo:replay:live -- "서울 대학생 지원"
 
 - Session IDs are server-issued UUIDs; path traversal, unknown sessions,
   sequence gaps, and different duplicate events are rejected.
-- Exact retry of an already accepted immutable event is idempotent, supporting
-  response-loss recovery without duplicate trace rows.
+- An exact retry of a client event is idempotent only while that event is
+  still the session's latest row, supporting response-loss recovery without
+  duplicate trace rows. A turn's `tool.called` row ends that window: once it
+  lands, the client's next event gets a sequence-conflict reply carrying the
+  server's `nextSeq`, and the client rebuilds that event with it and retries
+  once.
+- The server records `session.start` and one `tool.called` ledger per turn
+  (tool name, call and failure counts only) in the same trace, and returns
+  `nextSeq` so the client cannot skip or reuse a sequence number.
 - Only `query.submit.text` may contain user-authored free text, bounded to 300
   characters. Other event payloads are type-specific and strict. Do not enter
   personal identifiers in a query.

@@ -24,7 +24,7 @@ silently treated as the general AAAI technical track.
 
 | Primary source | Relevant finding | Implemented response | Claim boundary |
 | --- | --- | --- | --- |
-| [Jelly: *Generative and Malleable User Interfaces with Generative and Evolving Task-Driven Data Model*, CHI 2025](https://doi.org/10.1145/3706598.3713285) | Natural language and direct manipulation can update an evolving intermediate task model. | `CompositionSpec`, stable card/entity references, deterministic shell state, trace events, and composition points separate local edits from model recomposition. | Jelly's exploratory study had eight participants. This project does not implement its full object relationship/dependency model, and “composition point” is this project's design choice. |
+| [Jelly: *Generative and Malleable User Interfaces with Generative and Evolving Task-Driven Data Model*, CHI 2025](https://doi.org/10.1145/3706598.3713285) | Natural language and direct manipulation can update an evolving intermediate task model. | `CompositionSpec`, stable card/entity references, deterministic shell state, trace events, and composition points separate local edits from model recomposition. Engagement-driven sub-cards make the intermediate task model visibly evolve without a model key. | Jelly's exploratory study had eight participants. This project does not implement its full object relationship/dependency model, and “composition point” is this project's design choice. |
 | [DynaVis, CHI 2024](https://doi.org/10.1145/3613904.3642639) | Persistent widgets enabled rapid, repeated direct edits and were preferred over NLI-only editing in a 24-person visualization study. | Pin, hide, expand/collapse, and keyboard reorder are local reducer operations; the model/network is called only at a composition point. | The local-action target of p95 `<100 ms` is a project QA threshold, not a number reported by DynaVis. Public-benefit discovery is a different task. |
 | [*Generative Interfaces for Language Models*, Findings of ACL 2026](https://aclanthology.org/2026.findings-acl.74/) | GenUI was evaluated across query-interface consistency, task efficiency, usability, learnability, information clarity, aesthetics, and interaction satisfaction. | The UI exposes query, persona, status, source, rationale, and reversible manipulation paths; the seven dimensions are retained as future study outcomes. | The paper does not show that every query benefits from GenUI, nor that an attractive generated UI is correct. This project still lacks a chat/static/GenUI routing experiment. |
 | [UICrit, UIST 2024](https://doi.org/10.1145/3654777.3676381) | Structured expert critique data improved LLM UI feedback. | Release QA includes reflow, focus, contrast, status, readable labels, and button/keyboard checks; browser inspection complements automated tests. | An LLM or automated accessibility checker is not the sole release oracle. |
@@ -62,20 +62,36 @@ silently treated as the general AAAI technical track.
 
 1. Direct manipulations update the shell immediately and do not call the model.
 2. A server-issued UUID session and monotonic event sequence back every trace;
-   exact event retries are idempotent and different duplicate/gap events fail.
+   an exact retry is idempotent only while the retried event is still the
+   session's latest row (a turn's `tool.called` row ends that window),
+   different duplicate/gap events fail, and a sequence-conflict reply carries
+   the server's `nextSeq`, so a client that lost a turn's response
+   re-synchronises and retries once.
 3. `pnpm demo:replay` passes through Hono HTTP session/event/turn endpoints,
-   persists eight events, verifies the second provider request received the
-   server-derived trace, and checks pin/hide/reorder effects.
+   persists eleven events (including the `session.start` and `tool.called`
+   bookkeeping rows), verifies the second provider request received the
+   server-derived trace, and checks pin/hide/reorder effects and the
+   candidate-grouped visible order.
 4. Gateway tool outputs are parsed with the shared published v2 Zod contracts;
    MCP `structuredContent` must equal the JSON TextContent fallback exactly,
    and unsupported schema versions produce a visible compatibility fallback.
 5. The provider sees no raw user query, gateway title/summary, profile string,
    or URL. Its result must satisfy strict component/tool/entity/order schemas.
-6. A2UI is reduced to trusted `Column` and `Text` primitives, all gateway text
-   is HTML-escaped, and model-produced URLs/HTML are impossible by contract.
+6. A2UI is reduced to a bounded `Card`/`Column`/`Row`/`Divider`/`Text` catalog
+   plus `Button` (a named canvas action only) and `CheckBox` (a bound
+   per-row path only); all gateway text is HTML-escaped, and model-produced
+   URLs/raw HTML are impossible by contract.
 7. Scores and statuses are framed as candidate-ranking signals. The UI uses
    only structured gateway links and labels a link official only when
    `official: true`, while retaining link health and freshness warnings.
+8. Without any model key, engagement changes the composition's component set:
+   expand → Checklist + SourceNotice, pin → ScoreBreakdown, ticked rows keep
+   Checklist, persona switch → PersonaSelector, dated deadlines → DeadlineList.
+   `pnpm demo:replay` asserts the component-type difference between the
+   control and manipulated compositions.
+9. Server-composed Buttons and CheckBoxes are the only interactive A2UI
+   primitives; their actions are re-validated by the shell and recorded as the
+   same bounded events as sidebar controls.
 
 The authoritative executable checks are in [verification.md](verification.md).
 
@@ -92,9 +108,11 @@ The authoritative executable checks are in [verification.md](verification.md).
   study, deployment outcome, or calibrated reliance experiment.
 - The project has not measured the local-action p95 threshold in a browser lab;
   the reducer and visual behavior are functionally tested.
-- Composition-level diff history, GenUI necessity routing, and
-  feedback/recourse remain product-research work. Local card manipulations now
-  have tested undo/redo with inverse trace events.
+- Composition-level history (returning to a previous canvas), GenUI
+  necessity routing, and feedback/recourse remain product-research work.
+  Card manipulations and checklist ticks have tested undo/redo with inverse
+  trace events inside one composition; hidden cards persist across
+  compositions.
 
 ## Required product study before effectiveness claims
 

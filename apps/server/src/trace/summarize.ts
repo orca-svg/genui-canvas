@@ -1,24 +1,31 @@
-import type { EntityEngagement, InteractionEvent, TraceSummary } from "@genui-canvas/contracts";
+import {
+  CHECKLIST_MAX_ITEMS,
+  type EntityEngagement,
+  type InteractionEvent,
+  type TraceSummary,
+} from "@genui-canvas/contracts";
 
 export interface SummarizeOptions {
   maxEntities?: number;
   maxRecent?: number;
 }
 
+/** Server bookkeeping rows: kept in the trace, never shown to the provider as "recent activity". */
+const SILENT_EVENT_TYPES = new Set<InteractionEvent["type"]>(["tool.called", "session.start"]);
+
 interface Mutable {
   entityId: string;
-  title: string;
   pinned: boolean;
   hidden: boolean;
   expandCount: number;
+  checkedItems: Set<number>;
   lastAction?: string;
   lastSeq: number;
 }
 
 /**
  * Deterministic aggregation of a session's interaction trace into the context
- * the LLM sees at a composition point. LLM-free (so the trace→composition tests
- * are stable) and bounded (entity + recent caps) to keep the prompt small.
+ * the provider sees at a composition point. LLM-free and bounded.
  */
 export function summarizeTrace(
   events: InteractionEvent[],
@@ -34,13 +41,21 @@ export function summarizeTrace(
   const touch = (entityId: string): Mutable => {
     let entry = byEntity.get(entityId);
     if (!entry) {
-      entry = { entityId, title: entityId, pinned: false, hidden: false, expandCount: 0, lastSeq: -1 };
+      entry = {
+        entityId,
+        pinned: false,
+        hidden: false,
+        expandCount: 0,
+        checkedItems: new Set(),
+        lastSeq: -1,
+      };
       byEntity.set(entityId, entry);
     }
     return entry;
   };
 
   for (const event of events) {
+    if (SILENT_EVENT_TYPES.has(event.type)) continue;
     if (event.type === "query.submit" || event.type === "persona.switch") turnCount += 1;
     if (event.type === "card.reorder") userReordered = true;
 
@@ -65,6 +80,16 @@ export function summarizeTrace(
       case "card.expand":
         entry.expandCount += 1;
         break;
+      case "checklist.check": {
+        const index = checklistIndex(event);
+        if (index !== undefined) entry.checkedItems.add(index);
+        break;
+      }
+      case "checklist.uncheck": {
+        const index = checklistIndex(event);
+        if (index !== undefined) entry.checkedItems.delete(index);
+        break;
+      }
       default:
         break;
     }
@@ -73,20 +98,25 @@ export function summarizeTrace(
   const engagement: EntityEngagement[] = [...byEntity.values()]
     .sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      if (a.expandCount !== b.expandCount) return b.expandCount - a.expandCount;
+      const aEngaged = a.expandCount + a.checkedItems.size;
+      const bEngaged = b.expandCount + b.checkedItems.size;
+      if (aEngaged !== bEngaged) return bEngaged - aEngaged;
       return b.lastSeq - a.lastSeq;
     })
     .slice(0, maxEntities)
     .map((entry) => ({
       entityId: entry.entityId,
-      title: entry.title,
       pinned: entry.pinned,
       hidden: entry.hidden,
       expandCount: entry.expandCount,
+      // checklistIndex already bounds every admitted index to [0, CHECKLIST_MAX_ITEMS),
+      // so the Set can never hold more than CHECKLIST_MAX_ITEMS entries.
+      checkedItems: [...entry.checkedItems].sort((a, b) => a - b),
       ...(entry.lastAction ? { lastAction: entry.lastAction } : {}),
     }));
 
   const recentEvents = events
+    .filter((event) => !SILENT_EVENT_TYPES.has(event.type))
     .slice(-maxRecent)
     .map((event) => oneLine(event));
 
@@ -100,6 +130,13 @@ export function summarizeTrace(
   }
 
   return summary;
+}
+
+function checklistIndex(event: InteractionEvent): number | undefined {
+  const raw = event.payload?.itemIndex;
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw < CHECKLIST_MAX_ITEMS
+    ? raw
+    : undefined;
 }
 
 function oneLine(event: InteractionEvent): string {

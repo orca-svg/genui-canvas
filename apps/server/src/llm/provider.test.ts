@@ -83,3 +83,99 @@ describe("RuleBasedProvider", () => {
     expect(a).toEqual(b);
   });
 });
+
+const ref = (toolResult: "searchBenefits" | "buildChecklist" | "getBenefitDetail", entityId: string) => ({ toolResult, entityId });
+const fullResources = (): ComposeRequest["resources"] => [
+  { componentType: "BenefitCard", entityRef: ref("searchBenefits", "a") },
+  { componentType: "ScoreBreakdown", entityRef: ref("searchBenefits", "a") },
+  { componentType: "Checklist", entityRef: ref("buildChecklist", "a") },
+  { componentType: "SourceNotice", entityRef: ref("getBenefitDetail", "a") },
+  { componentType: "BenefitCard", entityRef: ref("searchBenefits", "b") },
+  { componentType: "ScoreBreakdown", entityRef: ref("searchBenefits", "b") },
+  { componentType: "Checklist", entityRef: ref("buildChecklist", "b") },
+  { componentType: "SourceNotice", entityRef: ref("getBenefitDetail", "b") },
+  { componentType: "DeadlineList", entityRef: { toolResult: "getUpcomingDeadlines", entityId: "upcoming-deadlines" } },
+  { componentType: "PersonaSelector", entityRef: { toolResult: "listPersonas", entityId: "personas" } },
+];
+const row = (entityId: string, flags: Partial<{ pinned: boolean; hidden: boolean; expanded: boolean }>) => ({
+  cardId: `card-${entityId}`,
+  entityId,
+  componentType: "BenefitCard" as const,
+  pinned: false,
+  hidden: false,
+  expanded: false,
+  ...flags,
+});
+async function composeTypes(request: ComposeRequest): Promise<string[]> {
+  const raw = (await new RuleBasedProvider().compose(request)) as {
+    cards: Array<{ cardId: string; componentType: string; entityRef: { entityId: string } }>;
+    order: string[];
+  };
+  expect(CompositionSpecSchema.safeParse(raw).success).toBe(true);
+  return raw.order.map((id) => {
+    const card = raw.cards.find((c) => c.cardId === id)!;
+    return `${card.componentType}:${card.entityRef.entityId}`;
+  });
+}
+
+describe("RuleBasedProvider — trace-driven sub-cards", () => {
+  it("emits only BenefitCards plus the offered DeadlineList on a fresh query", async () => {
+    expect(await composeTypes({ ...baseRequest(), resources: fullResources() })).toEqual([
+      "BenefitCard:a",
+      "BenefitCard:b",
+      "DeadlineList:upcoming-deadlines",
+    ]);
+  });
+
+  it("adds Checklist and SourceNotice after an expanded candidate and ScoreBreakdown after a pinned one", async () => {
+    const request = {
+      ...baseRequest({ currentComposition: { cards: [row("a", { expanded: true }), row("b", { pinned: true })] } }),
+      resources: fullResources(),
+    };
+    expect(await composeTypes(request)).toEqual([
+      "BenefitCard:b",
+      "ScoreBreakdown:b",
+      "BenefitCard:a",
+      "Checklist:a",
+      "SourceNotice:a",
+      "DeadlineList:upcoming-deadlines",
+    ]);
+  });
+
+  it("keeps a Checklist when the trace shows ticked rows even if the card is collapsed", async () => {
+    const request = {
+      ...baseRequest({
+        traceSummary: {
+          entityEngagement: [{ entityId: "b", pinned: false, hidden: false, expandCount: 1, checkedItems: [0, 2] }],
+          recentEvents: [],
+          turnCount: 1,
+        },
+      }),
+      resources: fullResources(),
+    };
+    expect(await composeTypes(request)).toEqual([
+      "BenefitCard:a",
+      "BenefitCard:b",
+      "Checklist:b",
+      "DeadlineList:upcoming-deadlines",
+    ]);
+  });
+
+  it("puts a PersonaSelector first only for a persona.switch trigger and never emits unoffered cards", async () => {
+    const switched = {
+      ...baseRequest({ trigger: { type: "persona.switch", personaId: "senior" } }),
+      resources: fullResources(),
+    };
+    expect((await composeTypes(switched))[0]).toBe("PersonaSelector:personas");
+    const bare = { ...baseRequest({ currentComposition: { cards: [row("a", { expanded: true })] } }), resources: [] };
+    expect(await composeTypes(bare)).toEqual(["BenefitCard:a", "BenefitCard:b"]);
+  });
+
+  it("drops a hidden candidate's whole group", async () => {
+    const request = {
+      ...baseRequest({ currentComposition: { cards: [row("a", { hidden: true, expanded: true })] } }),
+      resources: fullResources(),
+    };
+    expect(await composeTypes(request)).toEqual(["BenefitCard:b", "DeadlineList:upcoming-deadlines"]);
+  });
+});
