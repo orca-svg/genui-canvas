@@ -38,9 +38,9 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | Area | Automated evidence required |
 | --- | --- |
 | Contracts | Strict valid/invalid fixtures for `CompositionSpec`, exact card/order set, component↔tool discriminants, opaque IDs, bounded query/profile/trace, type-specific interaction payloads, HTTPS source metadata, and the supported A2UI subset. |
-| Renderer | Escaped A2UI text renders; empty/late surfaces work; shell order and hidden filtering work; preview/expanded wrappers and IDs remain stable; tests finish without React `act` warnings. |
+| Renderer | Escaped A2UI text renders; empty/late surfaces work; shell order and hidden filtering work; candidate groups render their cards into fixed columns with the chrome before the body and a missing column kept as an empty cell; preview/expanded wrappers and IDs remain stable; tests finish without React `act` warnings. |
 | Interactive catalog | Wire schema accepts only `Card`/`Column`/`Row`/`Divider`/`Text`, `Button` with a named canvas action, and `CheckBox` bound to a path; renderer relays Button actions and CheckBox edits to the shell and writes shell-owned values back; the shell re-validates every action before mapping it to `persona.switch`. |
-| Shell UX | Custom query and persona are composition points; pin/hide/preview/reorder are immediate; pinned-first invariant holds; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
+| Shell UX | Custom query and persona are composition points; pin/hide/expand/reorder are immediate and act on the candidate row (drag handle, on-card buttons, P/H/E on a focused row, or the card list); pinned-first invariant holds and pinned rows move only among pinned rows; a hide from the card or with H leaves a six-second 되돌리기 strip that takes focus, and a hide from the card list does not; the card list opens 150ms after the pointer rests on the edge, closes 400ms after it leaves, stays open when locked, and leaves keyboard focus alone on a hover open; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
 | Trace/API | Server-issued UUID session, no path traversal, seq starts at zero, gap/different duplicate rejected, exact retry idempotent only while the retried event is still the session's latest row (ends when a turn's `tool.called` row lands), sequence conflicts return the server's `nextSeq` for one client re-sync retry, unknown sessions rejected, request objects strict, error details hidden, CORS allowlisted. |
 | Trace bookkeeping | `session.start` at seq 0, one `tool.called` per turn, `nextSeq` on terminal events, client events continue the server sequence, bookkeeping rows excluded from the provider's recent history. |
 | Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
@@ -121,23 +121,29 @@ mobile viewport.
 
 Required manual/browser checks:
 
-1. No horizontal document overflow at 320 CSS pixels and 400% zoom; the sidebar
-   becomes a normal block above the result canvas.
+1. No horizontal document overflow at 320 CSS pixels and 400% zoom; the toolbar
+   wraps onto several lines above the canvas and the candidate rows stack into
+   one column.
 2. Tab order begins with the visible-on-focus “추천 결과로 건너뛰기” link,
-   then query, persona, scenarios, source links, and card controls logically.
-3. Every action has a visible focus ring. Reorder works with the up/down buttons
-   without drag. The expand button has `aria-controls` and `aria-expanded`.
+   then the toolbar controls (scenarios, search, 추천 관점, history, 재구성;
+   Tab lands on one roving toolbar item, then the 추천 관점 select, and Arrow
+   keys move among the toolbar items), the candidate rows with their card
+   controls and source links, and the 카드 목록 handle, logically.
+3. Every action has a visible focus ring. Reorder works without drag: by
+   keyboard on the handle (item 15) or with 위로 이동 / 아래로 이동 in the card
+   list. 더 알아보기 has `aria-controls` and `aria-expanded`.
 4. Status changes are announced politely without moving focus. A failed turn
    leaves existing cards visible and provides a recovery instruction.
 5. Canvas buttons are at least 44 CSS pixels tall (`min-height: 2.75rem`) at
    the mobile breakpoint; the CheckBox box grows to 24 CSS pixels there
-   (`1.5rem`, up from 20 CSS pixels on desktop). Sidebar controls meet the
-   same 44-CSS-pixel (`2.75rem`) target at that breakpoint: scenario buttons,
-   the search input and its button, and the persona `select` get
-   `min-height: 2.75rem`, and each card's action buttons
-   (`[data-slot="attachment-action"]`) and the source link get both
-   `min-width` and `min-height: 2.75rem` (`styles.css`'s
-   `@media (max-width: 48rem)` block).
+   (`1.5rem`, up from 20 CSS pixels on desktop). Toolbar and card controls meet
+   the same 44-CSS-pixel (`2.75rem`) target at that breakpoint: every toolbar
+   button, the search input, and the persona `select` get
+   `min-height: 2.75rem`; the on-card buttons and 출처 link get
+   `min-height: 2.75rem` and the drag handle is `2.75rem` square; and each
+   card list entry's action buttons (`[data-slot="attachment-action"]`) and
+   source link get both `min-width` and `min-height: 2.75rem` (`styles.css`'s
+   `@media (max-width: 48rem)` blocks).
 6. Long Korean titles, URLs, caveats, and 200% text spacing do not overlap or
    become inaccessible.
 7. Reduced-motion preference removes non-essential transitions.
@@ -145,17 +151,54 @@ Required manual/browser checks:
    `noopener noreferrer`; only `official: true` links receive an official-source
    label, and stale/unchecked health remains visible.
 9. Keyboard and VoiceOver/NVDA users can identify query, persona, result region,
-   card state, reorder, hide/unhide, pin/unpin, and preview/expand actions.
+   card state, reorder, hide/unhide, pin/unpin, and expand/collapse actions.
 10. Browser console contains no application errors during query, manipulation,
     recomposition, persona switch, source opening, and simulated server failure.
 11. Persona buttons inside a `PersonaSelector` card are reachable by keyboard,
     have a visible focus ring, and meet the button target from item 5.
     Checklist CheckBoxes are reachable by keyboard and show a 3-CSS-pixel
     focus ring even though their box stays below that target. Clicking a
-    persona button changes the sidebar persona control to the same value and
-    starts a composition.
+    persona button changes the toolbar's 추천 관점 control to the same value
+    and starts a composition.
 12. After "조작 반영해 재구성", a card hidden earlier still appears in the
-    card-control list as hidden and "다시 보기" shows it immediately.
+    card list as hidden and "다시 보기" shows it immediately.
+13. At 1920 CSS pixels the canvas spans the viewport width inside the page
+    padding; each candidate is one row with its `BenefitCard`,
+    `ScoreBreakdown`, `Checklist`, and `SourceNotice` in aligned columns; an
+    empty slot draws nothing unless it carries a hint ("고정한 뒤 재구성하면
+    점수 분석이 여기 옵니다" on an unpinned candidate, "재구성하면 점수 분석이
+    여기 옵니다" once it is pinned, and "재구성하면 체크리스트가 여기 옵니다" and
+    "재구성하면 출처 안내가 여기 옵니다" on an expanded one; a row without a
+    `BenefitCard` shows none).
+14. Dragging a row by its handle shows a ghost and a placeholder; dropping it
+    records one `card.reorder`; a pinned row cannot be dropped among unpinned
+    rows (the placeholder stops and the hint "고정된 카드는 고정 그룹 안에서만
+    이동합니다" appears).
+15. Keyboard reorder: focus the handle, press Space, ArrowDown, then Enter; the
+    Korean announcement is read at each step, and Esc cancels the move.
+16. P, H, and E on a focused row pin, hide, or expand it, also under a Korean
+    input source; 숨기기 leaves the 되돌리기 strip in the row's place for six
+    seconds, with focus on 되돌리기.
+17. Resting the pointer on the right edge opens the card list after about
+    150ms; leaving closes it after about 400ms; 열어 두기 keeps it open; the
+    카드 목록 handle toggles it; Esc closes it.
+18. Under 48rem the rows stack, the card buttons stay visible and are at least
+    44 CSS pixels tall (item 5), and the card list is a bottom sheet opened from
+    the toolbar's 카드 목록 button; the edge handle is not shown.
+19. With `prefers-reduced-motion: reduce`, these are off: the drawer and
+    handle slide, the row-shift transitions while dragging, the dragged
+    ghost's drop animation (the overlays pass `dropAnimation={null}`; dnd-kit
+    plays it through the Web Animations API, which CSS cannot reach), and the
+    fade of the jump flash; the card list's jump scrolls instantly.
+20. A hover-open of the card list leaves keyboard focus where it was; a
+    handle or toolbar open moves focus into the list.
+21. Sub-card bodies are never clipped: at 1440 and 1024 CSS pixels, a
+    candidate that was expanded and pinned and then recomposed shows its
+    `ScoreBreakdown`, `Checklist`, and `SourceNotice` in full (only a
+    collapsed `BenefitCard` or band is capped at an 18rem preview).
+22. The 카드 목록 handle does not cover a canvas column: above 48rem it is a
+    vertical tab no wider than 2rem inside the page's right padding, which is
+    at least 2.5rem there.
 
 Retain screenshots and console/overflow measurements with the release record;
 do not infer this gate from unit tests alone.

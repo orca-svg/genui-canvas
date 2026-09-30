@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
-  CanvasSurfaces,
   type A2uiMessages,
   type CanvasActionEvent,
   type CanvasValueChange,
@@ -9,8 +8,11 @@ import {
   createShellState,
   shellReducer,
   type ShellAction,
+  type ShellCard,
   type ShellState,
 } from "./state/shell-store.js";
+import { deriveCanvasGroups, rowsOf } from "./state/canvas-layout.js";
+import { planRowMove } from "./state/drag-reorder.js";
 import {
   deriveCompositionAppliedEvent,
   deriveCompositionPointEvent,
@@ -30,7 +32,11 @@ import {
   type SessionHandle,
   type TurnBody,
 } from "./api/client.js";
-import { CardFrame } from "./components/CardFrame.js";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { CanvasRows } from "./components/CanvasRows.js";
+import { EdgeDrawer, rowNeighbour, type RowDirection } from "./components/EdgeDrawer.js";
+import { TopToolbar } from "./components/TopToolbar.js";
+import { MOBILE_QUERY, useMediaQuery } from "./hooks/use-media-query.js";
 
 interface Scenario {
   label: string;
@@ -210,7 +216,13 @@ export function App() {
   const [historyAvailability, setHistoryAvailability] = useState({
     canUndo: false,
     canRedo: false,
+    // Manipulations on the undo stack; shown on 재구성 only while `dirty`.
+    pendingCount: 0,
   });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const mobile = useMediaQuery(MOBILE_QUERY);
+  // One flash timer per row wrapper: a repeated jump restarts that row's flash.
+  const flashTimersRef = useRef(new WeakMap<HTMLElement, number>());
 
   // The one writer for shell state: keeps `shellRef` current at the moment of
   // the write itself, not only at the render-time assignment above (which
@@ -223,11 +235,6 @@ export function App() {
     setShell(next);
   }
 
-  // The canvas follows the shell instantly: shell order (pinned first), hidden
-  // cards dropped, expanded flag passed through — no server round-trip.
-  const layout = shell.cards
-    .filter((c) => !c.hidden)
-    .map((c) => ({ cardId: c.cardId, expanded: c.expanded, emphasis: c.emphasis }));
   const checklistCards = useMemo(
     () => shell.cards.filter((c) => c.componentType === "Checklist" && typeof c.itemCount === "number"),
     [shell],
@@ -346,7 +353,7 @@ export function App() {
               ? "일치하는 후보를 찾지 못했습니다. 검색 조건을 바꿔 다시 시도하세요."
               : visibleCardCount > 0
                 ? `${visibleCardCount}개 카드를 구성했습니다.`
-                : "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.";
+                : "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 목록’에서 ‘다시 보기’로 표시할 수 있습니다.";
         setIntent(hadHistory ? `${summary} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : summary);
         try {
           await enqueueTrace((seq) =>
@@ -426,7 +433,7 @@ export function App() {
 
   // A server-composed Button reaches the shell here. It is re-validated against
   // the canvas action contract and mapped onto the same composition point the
-  // sidebar control uses — never executed as-is.
+  // toolbar control uses — never executed as-is.
   function handleCanvasAction(action: CanvasActionEvent) {
     // While a turn is in flight, every canvas action is ignored — including
     // an invalid one, which would otherwise overwrite the busy status text
@@ -489,6 +496,9 @@ export function App() {
   // re-compose — that is reserved for composition points, so scroll position
   // and focus are preserved.
   function manipulate(action: ShellAction) {
+    // The turn in flight will replace the shell; a manipulation now (a drag ending mid-turn,
+    // say) would be recorded and then lost. Every caller's own control is disabled too.
+    if (busy) return;
     const before = shellRef.current;
     const after = shellReducer(before, action);
     if (sameShell(before, after)) return;
@@ -520,6 +530,7 @@ export function App() {
     setHistoryAvailability({
       canUndo: pastRef.current.length > 0,
       canRedo: futureRef.current.length > 0,
+      pendingCount: pastRef.current.length,
     });
   }
 
@@ -580,149 +591,116 @@ export function App() {
     void runTurn(scenarioRef.current, shellRef.current);
   }
 
+  // The card list moves a whole candidate row one step, the same single
+  // card.reorder a drag onto the neighbouring row produces.
+  function moveRow(card: ShellCard, direction: RowDirection) {
+    const cards = shellRef.current.cards;
+    const rows = rowsOf(deriveCanvasGroups(cards));
+    const neighbour = rowNeighbour(rows, card, direction);
+    if (!neighbour) return;
+    const own = rows.find((row) => row.benefitCardId === card.cardId);
+    const action = own && planRowMove(cards, rows, own.key, neighbour.key);
+    if (action) manipulate(action);
+  }
+
+  // The card list's jump: bring the card's row into view, hand it focus, and
+  // flash it so the eye finds it; the mobile sheet gets out of the way.
+  function jumpToCard(cardId: string) {
+    const card = document.getElementById(`canvas-card-${cardId}`);
+    if (!card) return;
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    card.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    const rowItem = card.closest<HTMLElement>(".canvas-row-item") ?? card;
+    rowItem.focus({ preventScroll: true });
+    rowItem.setAttribute("data-flash", "true");
+    const flashTimers = flashTimersRef.current;
+    const previous = flashTimers.get(rowItem);
+    if (previous !== undefined) window.clearTimeout(previous);
+    flashTimers.set(
+      rowItem,
+      window.setTimeout(() => {
+        rowItem.removeAttribute("data-flash");
+        flashTimers.delete(rowItem);
+      }, 1200),
+    );
+    if (mobile) setDrawerOpen(false);
+  }
+
   return (
     <>
       <a className="skip-link" href="#recommendation-results">
         추천 결과로 건너뛰기
       </a>
-      <main className="app">
-      <header className="app__header">
-        <h1>genui-canvas</h1>
-        <p className="app__intent" role="status" aria-live="polite">
-          {intent}
-        </p>
-      </header>
-
-      <section className="scenarios" aria-label="시나리오">
-        {SCENARIOS.map((s) => (
-          <button key={s.label} disabled={busy || !sessionId} onClick={() => selectScenario(s)}>
-            {s.label}
-          </button>
-        ))}
-      </section>
-
-      <form className="query-form" onSubmit={submitQuery}>
-        <label htmlFor="benefit-query">혜택 검색</label>
-        <div className="query-form__controls">
-          <input
-            id="benefit-query"
-            name="benefit-query"
-            type="search"
-            autoComplete="off"
-            maxLength={300}
-            aria-describedby="benefit-query-hint"
-            placeholder="예: 부산 청년 창업 지원…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+      <TooltipProvider>
+        <main className="app">
+          <header className="app__header">
+            <h1>genui-canvas</h1>
+          </header>
+          <TopToolbar
+            scenarios={SCENARIOS}
+            onScenario={(label) => {
+              const scenario = SCENARIOS.find((candidate) => candidate.label === label);
+              if (scenario) selectScenario(scenario);
+            }}
+            query={query}
+            onQueryChange={setQuery}
+            onSubmit={submitQuery}
+            persona={persona}
+            personas={[...PERSONAS]}
+            onPersonaChange={switchPersona}
+            disabled={busy || !sessionId}
+            canUndo={historyAvailability.canUndo}
+            canRedo={historyAvailability.canRedo}
+            onUndo={undo}
+            onRedo={redo}
+            pendingCount={dirty ? historyAvailability.pendingCount : 0}
+            canRecompose={dirty}
+            onRecompose={recompose}
+            showCardList={mobile}
+            cardListOpen={drawerOpen}
+            onToggleCardList={() => setDrawerOpen((value) => !value)}
           />
-          <button type="submit" disabled={busy || !sessionId}>
-            혜택 찾기
-          </button>
-        </div>
-        <p id="benefit-query-hint" className="field-hint">
-          이름·주민번호·연락처 등 개인식별정보는 입력하지 마세요. 최대 300자입니다.
-        </p>
-      </form>
-
-      <div className="persona-control">
-        <label htmlFor="persona">추천 관점</label>
-        <select
-          id="persona"
-          name="persona"
-          value={persona}
-          disabled={busy || !sessionId}
-          onChange={switchPersona}
-        >
-          {PERSONAS.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <p className="candidate-notice">
-        추천 결과는 신청 가능성을 보장하지 않는 후보 정보입니다. 자격·마감일·서류는 출처 페이지에서
-        확인하고 해당 기관의 공식 주소인지 다시 확인하세요.
-      </p>
-      <p className="fixture-notice">
-        현재 연결된 게이트웨이 v0.3.0은 검증용 예시(fixture) 데이터를 제공합니다. 실제 정책 데이터가
-        아닙니다.
-      </p>
-
-      <div className="layout">
-        <section
-          id="recommendation-results"
-          className="canvas"
-          aria-label="추천 결과"
-          tabIndex={-1}
-        >
-          <CanvasSurfaces
-            messages={messages}
-            layout={layout}
-            onAction={handleCanvasAction}
-            watch={watch}
-            values={values}
-            onValueChange={handleCanvasValue}
+          <p className="app__intent" role="status" aria-live="polite">
+            {intent}
+          </p>
+          {/* One line of notices; each safety sentence stays whole in its own span. */}
+          <p className="notices">
+            <span>
+              추천 결과는 신청 가능성을 보장하지 않는 후보 정보입니다. 자격·마감일·서류는 출처 페이지에서 확인하고
+              해당 기관의 공식 주소인지 다시 확인하세요.
+            </span>{" "}
+            <span>
+              현재 연결된 게이트웨이 v0.3.0은 검증용 예시(fixture) 데이터를 제공합니다. 실제 정책 데이터가 아닙니다.
+            </span>
+          </p>
+          <section id="recommendation-results" className="canvas" aria-label="추천 결과" tabIndex={-1}>
+            {shell.cards.length === 0 && (
+              <p className="canvas__empty">검색어를 입력하거나 시나리오를 선택하면 카드가 나타납니다.</p>
+            )}
+            <CanvasRows
+              cards={shell.cards}
+              messages={messages}
+              busy={busy}
+              onManipulate={manipulate}
+              onAction={handleCanvasAction}
+              watch={watch}
+              values={values}
+              onValueChange={handleCanvasValue}
+            />
+          </section>
+          <EdgeDrawer
+            cards={shell.cards}
+            busy={busy}
+            open={drawerOpen}
+            onOpenChange={setDrawerOpen}
+            onPin={(card) => manipulate({ type: card.pinned ? "card.unpin" : "card.pin", cardId: card.cardId })}
+            onHide={(card) => manipulate({ type: card.hidden ? "card.unhide" : "card.hide", cardId: card.cardId })}
+            onExpand={(card) => manipulate({ type: card.expanded ? "card.collapse" : "card.expand", cardId: card.cardId })}
+            onMoveRow={moveRow}
+            onJump={jumpToCard}
           />
-        </section>
-
-        <aside className="controls" aria-label="카드 조작">
-          <h2>카드 조작</h2>
-          {shell.cards.length === 0 && <p>검색어를 입력하거나 시나리오를 선택하면 카드가 나타납니다.</p>}
-          {shell.cards.length > 0 && (
-            <>
-              <div className="controls__history" aria-label="조작 이력">
-                <button
-                  type="button"
-                  disabled={busy || !historyAvailability.canUndo}
-                  onClick={undo}
-                >
-                  실행 취소
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || !historyAvailability.canRedo}
-                  onClick={redo}
-                >
-                  다시 실행
-                </button>
-              </div>
-              <button
-                type="button"
-                className="controls__recompose"
-                disabled={busy || !dirty}
-                onClick={recompose}
-              >
-                조작 반영해 재구성
-              </button>
-            </>
-          )}
-          <div className="controls__cards">
-            {shell.cards.map((card, index) => {
-              const previous = shell.cards[index - 1];
-              const next = shell.cards[index + 1];
-              const canMoveUp = previous !== undefined && previous.pinned === card.pinned;
-              const canMoveDown = next !== undefined && next.pinned === card.pinned;
-              return (
-                <CardFrame
-                  key={card.cardId}
-                  card={card}
-                  busy={busy}
-                  onPin={() => manipulate({ type: card.pinned ? "card.unpin" : "card.pin", cardId: card.cardId })}
-                  onHide={() => manipulate({ type: card.hidden ? "card.unhide" : "card.hide", cardId: card.cardId })}
-                  onExpand={() => manipulate({ type: card.expanded ? "card.collapse" : "card.expand", cardId: card.cardId })}
-                  canMoveUp={canMoveUp}
-                  canMoveDown={canMoveDown}
-                  onMoveUp={() => manipulate({ type: "card.reorder", cardId: card.cardId, toIndex: index - 1 })}
-                  onMoveDown={() => manipulate({ type: "card.reorder", cardId: card.cardId, toIndex: index + 1 })}
-                />
-              );
-            })}
-          </div>
-        </aside>
-      </div>
-      </main>
+        </main>
+      </TooltipProvider>
     </>
   );
 }

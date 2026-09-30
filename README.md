@@ -29,11 +29,50 @@ immediate control over the resulting canvas.
 
 - A query submit or persona switch is a **composition point**. The server calls
   the gateway and then the selected rule-based or BYOK provider.
-- Pin, hide, preview/expand, keyboard reorder, and their undo/redo are
-  deterministic local operations. They do not call a model or wait for the
+- Pin, hide, expand, reorder (by drag handle or keyboard), and their undo/redo
+  are deterministic local operations. They do not call a model or wait for the
   network.
-- Every accepted action is a bounded, structured event. The next composition
-  reads a server-derived trace; the client cannot replace that summary.
+- Manipulation lives on the card. A drag handle (`{title} 순서 바꾸기`)
+  reorders candidate rows, and pinned rows move only among pinned rows.
+  **더 알아보기** marks a candidate expanded; its `Checklist` and
+  `SourceNotice` arrive with the next **조작 반영해 재구성**, and the empty
+  slots in its row say so. **고정** and **숨기기** sit on the card too; a pin
+  likewise brings the `ScoreBreakdown` with the next recomposition, and the
+  empty score slot says so before and after the pin. Hiding a row on the card
+  or with H leaves an inline **되돌리기** strip for six seconds, and focus
+  moves to it so the undo is reachable by keyboard; a hide from the card list
+  leaves no strip.
+- The canvas uses the full width as one row per candidate: `BenefitCard` first,
+  then `ScoreBreakdown`, `Checklist`, and `SourceNotice` in fixed columns so
+  candidates line up (two columns between 48rem and 64rem, stacked under
+  48rem). `PersonaSelector` is a band on top and `DeadlineList` a band at the
+  bottom. An empty slot draws nothing unless it carries a hint, such as
+  "고정한 뒤 재구성하면 점수 분석이 여기 옵니다". When every card is hidden,
+  the canvas says so and points to the card list.
+- The top toolbar holds the scenarios, search, **추천 관점**, **실행 취소**,
+  **다시 실행**, and **조작 반영해 재구성** with the count of pending
+  manipulations (exposed as the button's accessible description,
+  "대기 조작 N개").
+- The card list is a drawer. Rest the pointer on the right screen edge for
+  150ms and it opens (it closes 400ms after the pointer leaves, **열어 두기**
+  keeps it open, Esc closes it); the always-visible **카드 목록** handle opens
+  it on desktop, and under 48rem the toolbar's **카드 목록** button opens it as
+  a bottom sheet. It lists one entry per candidate rather than one per
+  sub-card, in canvas order (a hidden row sits where it would reappear),
+  jumps to a card, restores hidden rows, and lets you 고정, 숨기기,
+  or 위로·아래로 이동 any candidate, which helps when there are many. A
+  hover-open leaves keyboard focus where it was, whereas the handle or the
+  toolbar button moves focus into the list.
+- Keyboard: rows are focusable, and P, H, and E pin, hide, and expand the
+  focused row. The typed letter counts, so a Dvorak or AZERTY user presses the
+  letter itself; under a Korean input source, where the key types a jamo, the
+  physical key stands in. A keyboard-focused row reveals its 고정 and 숨기기
+  buttons and declares the keys with `aria-keyshortcuts`. On the handle, Space
+  picks a row up, the arrow keys move it, Enter drops it, and Esc cancels,
+  with Korean announcements for screen readers.
+- Every accepted action is a bounded, structured event, whether it starts on
+  the card, in the card list, or at the keyboard. The next composition reads a
+  server-derived trace; the client cannot replace that summary.
 - Server invariants preserve hidden, pinned, and explicitly reordered cards
   even when a provider ignores the user's manipulation.
 - Failed recomposition keeps the previous canvas and records a
@@ -50,9 +89,9 @@ immediate control over the resulting canvas.
   trace, also when a `Checklist` returns after dropping out of a composition.
   They are never an application state.
 - A hidden candidate stays in the shell as a hidden row after recomposition,
-  so "다시 보기" works without a round-trip. Compositions themselves are not
-  undoable; the undo history restarts at each composition point and the
-  status line says so.
+  so "다시 보기" in the card list works without a round-trip. Compositions
+  themselves are not undoable; the undo history restarts at each composition
+  point and the status line says so.
 
 The model does not write markup or URLs. It sees only opaque IDs, enums, ranks,
 relative scores, allowed component references, and bounded trace flags. Raw
@@ -85,9 +124,9 @@ protocol test.
 
 ```text
 apps/web (Vite + React)               apps/server (Hono)
-  ├─ query + persona controls           ├─ server-issued session / strict event API
+  ├─ toolbar: query, persona, history   ├─ server-issued session / strict event API
   ├─ deterministic shell reducer        ├─ MCP stdio client ─▶ @mcp-gen-ui/mcp-server
-  ├─ accessible CardFrame controls      ├─ strict output cache + semantic projection
+  ├─ candidate rows, card list drawer   ├─ strict output cache + semantic projection
   └─ validated SSE/A2UI client ◀────────┤─ rule-based or BYOK Gemini provider
                                         └─ trace store + server-side summarizer
 
@@ -124,9 +163,14 @@ pnpm --filter @genui-canvas/server dev
 pnpm --filter @genui-canvas/web dev
 ```
 
-Enter a benefit query or use a sample scenario. Manipulate cards locally, then
-select **조작 반영해 재구성** to pass the persisted trace into the next
+Enter a benefit query or use a sample scenario. Manipulate cards on the canvas,
+then select **조작 반영해 재구성** to pass the persisted trace into the next
 composition.
+
+After adding or upgrading a dependency, restart the web dev server with
+`pnpm --filter @genui-canvas/web exec vite --force`. Otherwise Vite's
+mid-session dependency re-optimization can leave two React copies loaded and
+log "Invalid hook call".
 
 ## Provider configuration (BYOK)
 

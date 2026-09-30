@@ -1,10 +1,34 @@
 import { StrictMode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
+
+// Card-level controls live on the card chrome in the results region; the card
+// list drawer repeats the same names for its rows, so every card-level query
+// is scoped to one of the two.
+const results = () => within(screen.getByRole("region", { name: "추천 결과" }));
+// The card list drawer, opened from its always-visible handle. The drawer
+// moves focus into itself on the frame after it opens (a user's next click
+// always comes later), so this waits for that before handing the drawer back.
+async function openCardList(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "카드 목록" }));
+  const dialog = await screen.findByRole("dialog", { name: "카드 목록" });
+  await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+  return within(dialog);
+}
+// The app's progress line sits directly under the toolbar. dnd-kit adds its
+// own role="status" live region inside the canvas (so does the hide-undo
+// strip), so a page-wide getByRole("status") is ambiguous once rows render.
+const appStatus = () => {
+  const line = screen.getByRole("toolbar", { name: "구성 도구" }).nextElementSibling;
+  if (!(line instanceof HTMLElement) || line.getAttribute("role") !== "status") {
+    throw new Error("expected the role=status progress line directly under the toolbar");
+  }
+  return line;
+};
 
 function compositionSse(title = "테스트 혜택"): string {
   return compositionSseFor([{ entityId: "test-benefit", title }]);
@@ -192,7 +216,60 @@ function interactiveFetch(options: InteractiveOptions & { sessionNextSeq?: numbe
   return { eventBodies, turnBodies };
 }
 
+/** fetch mock: session → alpha/beta composition on every turn; alpha ships hidden from turn `alphaHiddenFrom` on. */
+function twoCardFetch(options: { alphaHiddenFrom?: number } = {}) {
+  const turnBodies: Array<Record<string, unknown>> = [];
+  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/session")) {
+      return new Response(JSON.stringify({ sessionId: SESSION_ID }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/api/events")) {
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (url.endsWith("/api/turn")) {
+      turnBodies.push(JSON.parse(String(init?.body)));
+      const alphaHidden = options.alphaHiddenFrom !== undefined && turnBodies.length >= options.alphaHiddenFrom;
+      return new Response(
+        compositionSseFor([
+          { entityId: "alpha", title: "첫 번째 혜택", hidden: alphaHidden },
+          { entityId: "beta", title: "두 번째 혜택" },
+        ]),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { turnBodies };
+}
+
+/** matchMedia stub: only the listed queries match. */
+function matchMediaFor(...matching: string[]) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: matching.includes(query),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
 afterEach(() => {
+  // jsdom serves requestAnimationFrame from one Node interval created on whichever clock is
+  // active; drain the fake clock so a pending frame cannot stall later tests' Base UI focus.
+  if (vi.isFakeTimers()) {
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+  }
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -208,7 +285,7 @@ describe("App", () => {
       ),
     );
     render(<App />);
-    const status = screen.getByRole("status");
+    const status = appStatus();
     expect(status).toHaveAttribute("aria-live", "polite");
     await waitFor(() => expect(screen.getByRole("button", { name: "혜택 찾기" })).toBeEnabled());
   });
@@ -348,10 +425,15 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    // The shell's card list is in the drawer now; it shows the trusted title too.
+    const cardList = await openCardList(user);
 
-    expect((await screen.findAllByText("사람이 읽는 혜택명")).length).toBeGreaterThanOrEqual(2);
+    // On the canvas: the card body once, and the trusted title naming the row (not the entity id).
+    expect(results().getAllByText("사람이 읽는 혜택명")).toHaveLength(1);
+    expect(results().getByRole("group", { name: "사람이 읽는 혜택명 카드" })).toBeInTheDocument();
+    expect(cardList.getByRole("button", { name: "사람이 읽는 혜택명(으)로 이동" })).toHaveTextContent("사람이 읽는 혜택명");
     expect(
-      screen.getByRole("link", { name: "사람이 읽는 혜택명 출처 페이지 열기" }),
+      results().getByRole("link", { name: "사람이 읽는 혜택명 출처 페이지 열기" }),
     ).toHaveAttribute("href", "https://www.gov.kr/benefit/benefit-1");
   });
 
@@ -390,9 +472,9 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
-    await screen.findByRole("button", { name: "동일 혜택 고정" });
-    await user.click(screen.getByRole("button", { name: "동일 혜택 고정" }));
-    await user.click(screen.getByRole("button", { name: "동일 혜택 숨기기" }));
+    await results().findByRole("button", { name: "동일 혜택 고정" });
+    await user.click(results().getByRole("button", { name: "동일 혜택 고정" }));
+    await user.click(results().getByRole("button", { name: "동일 혜택 숨기기" }));
     await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
 
     await waitFor(() => expect(turnBodies).toHaveLength(2));
@@ -408,11 +490,13 @@ describe("App", () => {
         ],
       },
     });
-    expect(await screen.findByRole("button", { name: "동일 혜택 고정 해제" })).toHaveAttribute(
+    // The card stays hidden, so its row controls are in the card list only.
+    const cardList = await openCardList(user);
+    expect(await cardList.findByRole("button", { name: "동일 혜택 고정 해제" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: "동일 혜택 다시 보기" })).toHaveAttribute(
+    expect(cardList.getByRole("button", { name: "동일 혜택 다시 보기" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -454,18 +538,18 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
-    await screen.findByRole("button", { name: "alpha 고정" });
-    await user.click(screen.getByRole("button", { name: "alpha 고정" }));
+    await results().findByRole("button", { name: "alpha 고정" });
+    await user.click(results().getByRole("button", { name: "alpha 고정" }));
     await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
 
     await waitFor(() => expect(turnBodies).toHaveLength(2));
-    expect(await screen.findByRole("button", { name: "alpha 고정 해제" })).toHaveAttribute(
+    expect(await results().findByRole("button", { name: "alpha 고정 해제" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     // beta is a brand-new entity: it must not inherit alpha's pin just
     // because the provider happened to reuse alpha's old card id for it.
-    expect(screen.getByRole("button", { name: "beta 고정" })).toHaveAttribute(
+    expect(results().getByRole("button", { name: "beta 고정" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -552,7 +636,7 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("2개 카드를 구성했습니다."),
+      expect(appStatus()).toHaveTextContent("2개 카드를 구성했습니다."),
     );
   });
 
@@ -583,8 +667,8 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.",
+      expect(appStatus()).toHaveTextContent(
+        "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 목록’에서 ‘다시 보기’로 표시할 수 있습니다.",
       ),
     );
   });
@@ -666,7 +750,7 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("테스트 혜택")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "test-benefit 고정" }));
+    await user.click(results().getByRole("button", { name: "test-benefit 고정" }));
     await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
     await waitFor(() => expect(releasePin).toBeTypeOf("function"));
     expect(turnCount).toBe(1);
@@ -753,7 +837,8 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "alpha 아래로 이동" }));
+    const cardList = await openCardList(user);
+    await user.click(cardList.getByRole("button", { name: "alpha 아래로 이동" }));
     const order = [...container.querySelectorAll(".genui-canvas-card")].map((element) =>
       element.getAttribute("data-card-id"),
     );
@@ -801,18 +886,19 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "beta 고정" }));
-    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "beta 아래로 이동" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "alpha 위로 이동" })).toBeDisabled();
+    await user.click(results().getByRole("button", { name: "beta 고정" }));
+    expect(results().getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
+    const cardList = await openCardList(user);
+    expect(cardList.getByRole("button", { name: "beta 아래로 이동" })).toBeDisabled();
+    expect(cardList.getByRole("button", { name: "alpha 위로 이동" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "실행 취소" }));
-    expect(screen.getByRole("button", { name: "beta 고정" })).toHaveAttribute("aria-pressed", "false");
+    expect(results().getByRole("button", { name: "beta 고정" })).toHaveAttribute("aria-pressed", "false");
     expect([...container.querySelectorAll(".genui-canvas-card")].map((card) => card.getAttribute("data-card-id"))).toEqual([
       "card-alpha",
       "card-beta",
     ]);
     await user.click(screen.getByRole("button", { name: "다시 실행" }));
-    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
+    expect(results().getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
 
     await waitFor(() => expect(eventBodies).toHaveLength(6));
     expect(eventBodies.slice(2).map((event) => event.type)).toEqual([
@@ -853,8 +939,8 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
 
-    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
-    const hideAlpha = screen.getByRole("button", { name: "alpha 숨기기" });
+    const pinBeta = results().getByRole("button", { name: "beta 고정" });
+    const hideAlpha = results().getByRole("button", { name: "alpha 숨기기" });
     // fireEvent.click flushes (and re-renders) after every call, so it cannot
     // reproduce two manipulations landing in the same JS tick. A raw DOM
     // click inside one `act` batch does: React queues both state updates
@@ -865,11 +951,13 @@ describe("App", () => {
       hideAlpha.click();
     });
 
-    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute(
+    expect(results().getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: "alpha 다시 보기" })).toHaveAttribute(
+    // alpha is hidden now, so its row controls are in the card list only.
+    const cardList = await openCardList(user);
+    expect(cardList.getByRole("button", { name: "alpha 다시 보기" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -908,7 +996,7 @@ describe("App", () => {
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
     await waitFor(() => expect(turnBodies).toHaveLength(1));
 
-    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
+    const pinBeta = results().getByRole("button", { name: "beta 고정" });
     const secondScenario = screen.getByRole("button", { name: "청년 구직자" });
     // Same same-tick reasoning as the manipulation test above: a raw click
     // inside one `act` batch pins beta and selects the second scenario
@@ -978,6 +1066,126 @@ describe("App", () => {
       ),
     );
   });
+
+  it("shows the pending manipulation count on 재구성 and clears it after recomposition", async () => {
+    const { turnBodies } = twoCardFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("첫 번째 혜택")).toBeInTheDocument();
+    const recompose = screen.getByRole("button", { name: "조작 반영해 재구성" });
+    const badge = () => recompose.querySelector(".toolbar__badge");
+    expect(recompose).toBeDisabled();
+    expect(badge()).toBeNull();
+
+    await user.click(results().getByRole("button", { name: "alpha 고정" }));
+    await user.click(results().getByRole("button", { name: "beta 더 알아보기" }));
+    expect(recompose).toHaveTextContent("2");
+    expect(recompose).toBeEnabled();
+    // The count follows the history: undo takes one manipulation off, redo puts it back.
+    await user.click(screen.getByRole("button", { name: "실행 취소" }));
+    expect(badge()).toHaveTextContent("1");
+    await user.click(screen.getByRole("button", { name: "다시 실행" }));
+    expect(badge()).toHaveTextContent("2");
+
+    await user.click(recompose);
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    // Settled: the turn is over (search is enabled again) and nothing is pending.
+    await waitFor(() => expect(screen.getByRole("button", { name: "혜택 찾기" })).toBeEnabled());
+    expect(badge()).toBeNull();
+    expect(recompose).toBeDisabled();
+  });
+
+  it("keeps a hidden card only in the card list after recomposition and restores it from there", async () => {
+    const { turnBodies } = twoCardFetch({ alphaHiddenFrom: 2 });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("첫 번째 혜택")).toBeInTheDocument();
+
+    await user.click(results().getByRole("button", { name: "alpha 숨기기" }));
+    await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
+    await waitFor(() => expect(turnBodies).toHaveLength(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "혜택 찾기" })).toBeEnabled());
+    expect(results().queryByText("첫 번째 혜택")).not.toBeInTheDocument();
+    expect(results().getByText("두 번째 혜택")).toBeInTheDocument();
+
+    const cardList = await openCardList(user);
+    await user.click(cardList.getByRole("button", { name: "alpha 다시 보기" }));
+    expect(await results().findByText("첫 번째 혜택")).toBeInTheDocument();
+    // Showing it again is a shell manipulation, not a new composition.
+    expect(turnBodies).toHaveLength(2);
+  });
+
+  it("jumps to a card from the card list and focuses its row", async () => {
+    twoCardFetch();
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("두 번째 혜택")).toBeInTheDocument();
+
+    const cardList = await openCardList(user);
+    await user.click(cardList.getByRole("button", { name: "beta(으)로 이동" }));
+    const row = results().getByRole("group", { name: "beta 카드" });
+    expect(document.activeElement).toBe(row);
+    expect(row).toHaveAttribute("data-flash", "true");
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center", behavior: "smooth" }));
+    scroll.mockRestore();
+  });
+
+  it("scrolls without animation under reduced motion and restarts a row's flash on a repeated jump", async () => {
+    matchMediaFor("(prefers-reduced-motion: reduce)");
+    twoCardFetch();
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("두 번째 혜택")).toBeInTheDocument();
+    const cardList = await openCardList(user);
+    const row = results().getByRole("group", { name: "beta 카드" });
+
+    vi.useFakeTimers();
+    fireEvent.click(cardList.getByRole("button", { name: "beta(으)로 이동" }));
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center", behavior: "auto" }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    fireEvent.click(cardList.getByRole("button", { name: "beta(으)로 이동" }));
+    act(() => {
+      vi.advanceTimersByTime(300); // 1.3s after the first jump, 0.3s after the second
+    });
+    expect(row).toHaveAttribute("data-flash", "true");
+    act(() => {
+      vi.advanceTimersByTime(900);
+    });
+    expect(row).not.toHaveAttribute("data-flash");
+    scroll.mockRestore();
+  });
+
+  it("offers the toolbar's 카드 목록 as the single mobile entry and closes the sheet after a jump", async () => {
+    matchMediaFor("(max-width: 48rem)");
+    twoCardFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("두 번째 혜택")).toBeInTheDocument();
+
+    const entries = screen.getAllByRole("button", { name: "카드 목록" });
+    expect(entries).toHaveLength(1);
+    const entry = within(screen.getByRole("toolbar", { name: "구성 도구" })).getByRole("button", { name: "카드 목록" });
+    expect(entry).toBe(entries[0]);
+    await user.click(entry);
+    const sheet = await screen.findByRole("dialog", { name: "카드 목록" });
+    expect(sheet).toHaveAttribute("data-mode", "sheet");
+    expect(entry).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(sheet.contains(document.activeElement)).toBe(true));
+
+    await user.click(within(sheet).getByRole("button", { name: "beta(으)로 이동" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull());
+    expect(entry).toHaveAttribute("aria-expanded", "false");
+    expect(document.activeElement).toBe(results().getByRole("group", { name: "beta 카드" }));
+  });
 });
 
 describe("App — interactive catalog", () => {
@@ -986,7 +1194,9 @@ describe("App — interactive catalog", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
-    expect(await screen.findByText("혜택 A")).toBeInTheDocument();
+    // The card's trusted title is shown by the card list (its entry label).
+    const cardList = await openCardList(user);
+    expect(await cardList.findByText("혜택 A", { selector: "button" })).toBeInTheDocument();
     await waitFor(() => expect(eventBodies).toHaveLength(2));
     expect(eventBodies[0]).toMatchObject({ seq: 1, type: "query.submit" });
     expect(eventBodies[1]).toMatchObject({ seq: 5, type: "composition.applied" });
@@ -997,8 +1207,10 @@ describe("App — interactive catalog", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
-    expect(await screen.findByText("혜택 A")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장");
+    // The card's trusted title is shown by the card list (its entry label).
+    const cardList = await openCardList(user);
+    expect(await cardList.findByText("혜택 A", { selector: "button" })).toBeInTheDocument();
+    expect(appStatus()).toHaveTextContent("테스트 의도 문장");
   });
 
   it("records checklist ticks as trace events and undoes them with the inverse event", async () => {
@@ -1033,6 +1245,19 @@ describe("App — interactive catalog", () => {
     expect((screen.getByRole("combobox", { name: "추천 관점" }) as HTMLSelectElement).value).toBe("senior");
   });
 
+  it("jumps to a band card from the card list and focuses its wrapper", async () => {
+    interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const cardList = await openCardList(user);
+    await user.click(await cardList.findByRole("button", { name: "추천 관점(으)로 이동" }));
+    const band = document.getElementById("canvas-card-personas")?.closest(".canvas-row-item");
+    expect(band).not.toBeNull();
+    expect(document.activeElement).toBe(band);
+    expect(band).toHaveAttribute("data-flash", "true");
+  });
+
   it("keeps a hidden card in the shell after recomposition so it can be shown again", async () => {
     interactiveFetch({ hiddenEntityId: "z" });
     const user = userEvent.setup();
@@ -1041,7 +1266,8 @@ describe("App — interactive catalog", () => {
     const canvas = within(screen.getByRole("region", { name: "추천 결과" }));
     expect(await canvas.findByText("혜택 A 본문")).toBeInTheDocument();
     expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" }));
+    const cardList = await openCardList(user);
+    await user.click(cardList.getByRole("button", { name: "숨긴 혜택 다시 보기" }));
     expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
   });
 
@@ -1092,7 +1318,7 @@ describe("App — interactive catalog", () => {
       ),
     );
     release();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+    await waitFor(() => expect(appStatus()).toHaveTextContent("테스트 의도 문장"));
   });
 
   it("ignores a composed persona button while a turn is busy", async () => {
@@ -1139,10 +1365,10 @@ describe("App — interactive catalog", () => {
 
     // Start a second turn that stays pending (busy), then click the
     // server-composed "시니어" persona button while it's in flight. The
-    // canvas renderer has no notion of `busy` (only the sidebar controls are
-    // disabled by it), so this button stays clickable and App must ignore it.
+    // canvas renderer has no notion of `busy` (only the shell's own controls
+    // are disabled by it), so this button stays clickable and App must ignore it.
     await user.click(screen.getByRole("button", { name: "청년 구직자" }));
-    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(appStatus()).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
     expect(turnBodies).toHaveLength(2);
     expect(eventBodies).toHaveLength(3);
 
@@ -1158,13 +1384,13 @@ describe("App — interactive catalog", () => {
     // the two guards. The guard in `handleCanvasAction` is load-bearing for
     // an *invalid* action instead (untestable through this DOM pipeline; see
     // that guard's comment).
-    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(appStatus()).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
     expect(personaSelect.value).toBe("youth_jobseeker");
     expect(turnBodies).toHaveLength(2);
     expect(eventBodies).toHaveLength(3);
 
     release();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+    await waitFor(() => expect(appStatus()).toHaveTextContent("테스트 의도 문장"));
   });
 
   it("hides a currently visible card when the next composition ships it in the hidden tail", async () => {
@@ -1201,7 +1427,8 @@ describe("App — interactive catalog", () => {
     expect(await canvas.findByText("숨긴 혜택 본문")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "청년 구직자" }));
     await waitFor(() => expect(canvas.queryByText("숨긴 혜택 본문")).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "숨긴 혜택 다시 보기" })).toBeInTheDocument();
+    const cardList = await openCardList(user);
+    expect(cardList.getByRole("button", { name: "숨긴 혜택 다시 보기" })).toBeInTheDocument();
   });
 
   it("starts a re-entering Checklist from the server's checked rows without posting a tick", async () => {
@@ -1307,9 +1534,9 @@ describe("App — interactive catalog", () => {
     const rejected = eventBodies.filter((e) => e.type === "composition.rejected");
     expect(rejected.map((e) => e.seq)).toEqual([4, 5]);
     expect(rejected[1]).toMatchObject({ payload: { reason: "turn_failed" } });
-    expect(screen.getByRole("status")).toHaveTextContent("추천을 갱신하지 못했습니다");
+    expect(appStatus()).toHaveTextContent("추천을 갱신하지 못했습니다");
 
-    await user.click(await screen.findByRole("button", { name: "혜택 A 고정" }));
+    await user.click(await results().findByRole("button", { name: "혜택 A 고정" }));
     await waitFor(() => expect(eventBodies.at(-1)).toMatchObject({ type: "card.pin", seq: 6 }));
   });
 });

@@ -58,7 +58,7 @@ describe("CardFrame", () => {
     );
     expect(screen.getByRole("button", { name: "seoul-youth-rent-support 고정" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "seoul-youth-rent-support 숨기기" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "seoul-youth-rent-support 펼치기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "seoul-youth-rent-support 더 알아보기" })).toBeDisabled();
   });
 
   it("maps a settled visible card to the done state", () => {
@@ -79,7 +79,7 @@ describe("CardFrame", () => {
       "data-state",
       "idle",
     );
-    const expand = screen.getByRole("button", { name: "seoul-youth-rent-support 펼치기" });
+    const expand = screen.getByRole("button", { name: "seoul-youth-rent-support 더 알아보기" });
     expect(expand).toBeDisabled();
     expect(expand).not.toHaveAttribute("aria-controls");
   });
@@ -105,7 +105,7 @@ describe("CardFrame", () => {
     );
     await user.click(screen.getByRole("button", { name: /고정/ }));
     await user.click(screen.getByRole("button", { name: /숨기기/ }));
-    await user.click(screen.getByRole("button", { name: /펼치기/ }));
+    await user.click(screen.getByRole("button", { name: /더 알아보기/ }));
     expect([pinned, hidden, expanded]).toEqual([1, 1, 1]);
   });
 

@@ -90,8 +90,8 @@ silently treated as the general AAAI technical track.
    `pnpm demo:replay` asserts the component-type difference between the
    control and manipulated compositions.
 9. Server-composed Buttons and CheckBoxes are the only interactive A2UI
-   primitives; their actions are re-validated by the shell and recorded as the
-   same bounded events as sidebar controls.
+   primitives; their actions are re-validated by the shell and recorded as
+   the same bounded events as the shell's card controls.
 
 The authoritative executable checks are in [verification.md](verification.md).
 

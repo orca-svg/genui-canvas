@@ -1,4 +1,4 @@
-import { useState, useLayoutEffect, useMemo, useRef, useEffect } from "react";
+import { Fragment, useState, useLayoutEffect, useMemo, useRef, useEffect, type ReactNode } from "react";
 import { A2uiSurface, MarkdownContext } from "@a2ui/react/v0_9";
 import { createProcessor, type A2uiMessages, type CanvasActionHandler } from "./processor.js";
 
@@ -18,11 +18,19 @@ const HTML_ESCAPES: Record<string, string> = {
 const plainTextMarkdownRenderer = async (markdown: string): Promise<string> =>
   markdown.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
 
-/** One entry per card the shell wants shown, in display order. */
-export interface CanvasCardLayout {
+/** One card the shell places in a group. `column` is an opaque name to the renderer. */
+export interface CanvasSlot {
   cardId: string;
+  column: string;
   expanded?: boolean;
   emphasis?: "primary" | "secondary";
+}
+
+/** A band (full-width cards) or a row (cells ordered by `rowColumns`), in display order. */
+export interface CanvasGroup {
+  key: string;
+  kind: "band" | "row";
+  slots: CanvasSlot[];
 }
 
 /** Data-model paths on one surface whose user edits the shell wants to hear about. */
@@ -46,13 +54,16 @@ export interface CanvasValueChange {
 
 export interface CanvasSurfacesProps {
   messages: A2uiMessages;
-  /**
-   * Shell-driven display order / visibility / expansion. When provided, cards
-   * render in this order, hidden cards (absent from the list) are dropped, and
-   * `expanded` is exposed as `data-expanded` for styling — all instantly,
-   * without re-composing. When omitted, every surface renders in message order.
-   */
-  layout?: CanvasCardLayout[];
+  /** Shell-derived bands and candidate rows. Omitted: every surface, message order, one band each. */
+  groups?: CanvasGroup[];
+  /** Column order inside a row; opaque names. Omitted: the order slots appear. */
+  rowColumns?: readonly string[];
+  /** Lets the shell wrap a group (e.g. a sortable item) without the renderer knowing why. */
+  renderGroup?: (group: CanvasGroup, content: ReactNode) => ReactNode;
+  /** Shell chrome rendered before a card's body (handle, buttons, badges). */
+  renderChrome?: (slot: CanvasSlot, group: CanvasGroup) => ReactNode;
+  /** Content for a row cell that has no card yet (hints). */
+  renderEmptySlot?: (column: string, group: CanvasGroup) => ReactNode;
   /** Receives Button actions; the shell validates them against its action contract. */
   onAction?: CanvasActionHandler;
   /** Paths to observe for user edits (e.g. checklist rows). */
@@ -69,7 +80,11 @@ export interface CanvasSurfacesProps {
  */
 export function CanvasSurfaces({
   messages,
-  layout,
+  groups,
+  rowColumns,
+  renderGroup,
+  renderChrome,
+  renderEmptySlot,
   onAction,
   watch,
   values,
@@ -158,41 +173,73 @@ export function CanvasSurfaces({
   }, [processor, watch]);
 
   const byId = new Map(surfaces.map((surface) => [surface.id, surface]));
-  type Entry = { surface: (typeof surfaces)[number]; expanded: boolean; emphasis?: "primary" | "secondary" };
-  type Candidate = {
-    surface: (typeof surfaces)[number] | undefined;
-    expanded: boolean;
-    emphasis?: "primary" | "secondary";
+  const effectiveGroups: CanvasGroup[] =
+    groups ??
+    surfaces.map((surface) => ({
+      key: `band:${surface.id}`,
+      kind: "band",
+      slots: [{ cardId: surface.id, column: "band" }],
+    }));
+
+  const renderCard = (slot: CanvasSlot, group: CanvasGroup) => {
+    const surface = byId.get(slot.cardId);
+    if (!surface) return null;
+    return (
+      <div
+        key={surface.id}
+        id={`canvas-card-${surface.id}`}
+        className="genui-canvas-card"
+        data-testid={`card-${surface.id}`}
+        data-card-id={surface.id}
+        data-column={slot.column}
+        data-expanded={slot.expanded ? "true" : "false"}
+        data-emphasis={slot.emphasis ?? "secondary"}
+      >
+        {renderChrome?.(slot, group)}
+        <div className="genui-canvas-card__body">
+          <A2uiSurface surface={surface} />
+        </div>
+      </div>
+    );
   };
-  const ordered: Entry[] = layout
-    ? layout
-        .map(
-          (entry): Candidate => ({
-            surface: byId.get(entry.cardId),
-            expanded: entry.expanded ?? false,
-            emphasis: entry.emphasis,
-          }),
-        )
-        .filter((entry): entry is Entry => entry.surface !== undefined)
-    : surfaces.map((surface) => ({ surface, expanded: false }));
+
+  const renderRow = (group: CanvasGroup) => {
+    const columns = rowColumns ?? group.slots.map((slot) => slot.column);
+    return (
+      <div
+        className="genui-canvas-row"
+        data-testid={`group-${group.key}`}
+        data-group-key={group.key}
+        data-columns={columns.length}
+      >
+        {columns.map((column) => {
+          const slot = group.slots.find((candidate) => candidate.column === column);
+          const card = slot ? renderCard(slot, group) : null;
+          return (
+            card ?? (
+              <div key={column} className="genui-canvas-slot genui-canvas-slot--empty" data-column={column}>
+                {renderEmptySlot?.(column, group)}
+              </div>
+            )
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderBand = (group: CanvasGroup) => (
+    <div className="genui-canvas-band" data-testid={`group-${group.key}`} data-group-key={group.key}>
+      {group.slots.map((slot) => renderCard(slot, group))}
+    </div>
+  );
 
   return (
     <MarkdownContext.Provider value={plainTextMarkdownRenderer}>
       <div className="genui-canvas-surfaces">
-        {ordered.map(({ surface, expanded, emphasis }) => (
-          <div
-            key={surface.id}
-            id={`canvas-card-${surface.id}`}
-            className="genui-canvas-card"
-            data-card-id={surface.id}
-            data-expanded={expanded ? "true" : "false"}
-            data-emphasis={emphasis ?? "secondary"}
-          >
-            <div className="genui-canvas-card__body">
-              <A2uiSurface surface={surface} />
-            </div>
-          </div>
-        ))}
+        {effectiveGroups.map((group) => {
+          const content = group.kind === "row" ? renderRow(group) : renderBand(group);
+          return <Fragment key={group.key}>{renderGroup ? renderGroup(group, content) : content}</Fragment>;
+        })}
       </div>
     </MarkdownContext.Provider>
   );
