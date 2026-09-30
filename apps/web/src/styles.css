@@ -185,6 +185,11 @@ input:disabled {
   .genui-canvas-row {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* One column: a hint-less cell would only add a row-gap, so it goes away. */
+  .genui-canvas-slot--empty:empty {
+    display: none;
+  }
 }
 
 .genui-canvas-card[data-expanded="true"] {

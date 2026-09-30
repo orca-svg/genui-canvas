@@ -45,8 +45,8 @@ export interface CardChromeProps {
 /**
  * The shell's controls on a BenefitCard, next to the card body: always-visible
  * drag handle and 더 알아보기; hover/focus-revealed 고정·숨기기·출처 that stay
- * in the tab order. Every button fires the same shell manipulations the
- * sidebar used, so the trace and the server see nothing new.
+ * in the tab order. The card list drawer and the card chrome both dispatch the
+ * same shell manipulations, so the trace and the server see one vocabulary.
  */
 export function CardChrome({ card, title, busy, handle, onPin, onHide, onExpand }: CardChromeProps) {
   const expandLabel = card.expanded ? "접기" : "더 알아보기";

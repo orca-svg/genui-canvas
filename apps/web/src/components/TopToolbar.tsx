@@ -136,9 +136,9 @@ export function TopToolbar(p: TopToolbarProps) {
             )}
           </Toolbar.Button>
         </Tooltip>
-        {/* The badge is decorative; the count reaches screen readers as the button's description. */}
+        {/* The badge is decorative; the count reaches screen readers as the button's description (aria-hidden keeps browse mode from reading it twice, and aria-describedby still resolves it). */}
         {pending && (
-          <span id={pendingId} className="sr-only">
+          <span id={pendingId} className="sr-only" aria-hidden="true">
             대기 조작 {p.pendingCount}개
           </span>
         )}

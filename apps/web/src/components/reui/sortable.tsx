@@ -47,6 +47,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { createPortal } from "react-dom"
 
 import { cn } from "@/lib/utils"
+import { useMediaQuery } from "../../hooks/use-media-query.js"
 
 // Sortable Item Context
 const SortableItemContext = createContext<{
@@ -81,6 +82,13 @@ const dropAnimationConfig: DropAnimation = {
     },
   }),
 }
+
+/**
+ * dnd-kit plays the drop animation through the Web Animations API, which the
+ * stylesheet's `prefers-reduced-motion` rule cannot reach, so the overlays turn
+ * it off themselves (`dropAnimation={null}`).
+ */
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)"
 
 /**
  * Client-mount gate for the `createPortal` calls below, which need
@@ -162,6 +170,7 @@ function Sortable<T>({
   ...props
 }: SortableRootProps<T>) {
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null)
+  const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY)
   const mounted = useSyncExternalStore(
     subscribeToNothing,
     getIsMounted,
@@ -294,7 +303,7 @@ function Sortable<T>({
         {mounted &&
           createPortal(
             <DragOverlay
-              dropAnimation={dropAnimationConfig}
+              dropAnimation={reducedMotion ? null : dropAnimationConfig}
               modifiers={modifiers}
               className={cn("z-50", activeId && "cursor-grabbing")}
             >
@@ -426,6 +435,7 @@ function SortableOverlay({
   ...props
 }: SortableOverlayProps) {
   const { activeId, modifiers } = useContext(SortableInternalContext)
+  const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY)
   const mounted = useSyncExternalStore(
     subscribeToNothing,
     getIsMounted,
@@ -443,7 +453,7 @@ function SortableOverlay({
 
   return createPortal(
     <DragOverlay
-      dropAnimation={dropAnimationConfig}
+      dropAnimation={reducedMotion ? null : dropAnimationConfig}
       modifiers={modifiers}
       className={cn("z-50", activeId && "cursor-grabbing", className)}
       {...props}

@@ -59,8 +59,9 @@ export function rowNeighbour(rows: readonly CanvasRow[], card: ShellCard, direct
 
 /**
  * The card map: hidden by default, revealed when the pointer rests on the
- * right screen edge, always reachable through the visible handle tab, and a
- * bottom sheet on narrow screens (no hover there).
+ * right screen edge, reachable through the handle tab on desktop or the
+ * toolbar's 카드 목록 button under 48rem, and a bottom sheet on narrow screens
+ * (no hover there).
  */
 export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onExpand, onMoveRow, onJump }: EdgeDrawerProps) {
   const mobile = useMediaQuery(MOBILE_QUERY);
