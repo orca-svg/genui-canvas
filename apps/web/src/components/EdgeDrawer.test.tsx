@@ -1,4 +1,4 @@
-import { act, createEvent, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -49,7 +49,18 @@ function touch(type: "pointerOver" | "pointerOut", target: Element) {
 }
 
 beforeEach(() => mockMatchMedia(false));
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  // jsdom serves requestAnimationFrame from one Node interval, created on whichever clock is
+  // active when the first frame is requested. A frame left pending on the fake clock would
+  // stall every later frame in this file (and Base UI's focus handling with it), so the fake
+  // clock is drained before the real one comes back.
+  if (vi.isFakeTimers()) {
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+  }
+  vi.useRealTimers();
+});
 
 describe("EdgeDrawer", () => {
   it("opens 150ms after the pointer rests on the edge zone and closes 400ms after it leaves", () => {
@@ -201,13 +212,37 @@ describe("EdgeDrawer", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
-  it("drops the edge zone and becomes a bottom sheet under 48rem", async () => {
+  it("drops the edge zone and the handle and becomes a bottom sheet under 48rem", () => {
     mockMatchMedia(true);
-    const user = userEvent.setup();
-    render(<Harness />);
+    // Under 48rem the toolbar's 카드 목록 is the only entry, so the parent opens it.
+    render(<Harness open={true} onOpenChange={vi.fn()} />);
     expect(screen.queryByTestId("edge-zone")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "카드 목록" }));
+    expect(screen.queryByRole("button", { name: "카드 목록" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "카드 목록" })).toHaveAttribute("data-mode", "sheet");
+  });
+
+  it("leaves keyboard focus where it was on a hover open, but moves it into the drawer on a handle open", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <input aria-label="검색어" />
+        <Harness />
+      </>,
+    );
+    const input = screen.getByLabelText("검색어");
+    input.focus();
+    fireEvent.pointerOver(screen.getByTestId("edge-zone"));
+    await screen.findByRole("dialog", { name: "카드 목록" });
+    // Base UI queues the popup's initial focus through a microtask and an animation frame (~16ms).
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
+    expect(document.activeElement).toBe(input);
+
+    const handle = screen.getByRole("button", { name: "카드 목록" });
+    await user.click(handle); // closes the hover-opened drawer
+    expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull();
+    await user.click(handle);
+    const dialog = await screen.findByRole("dialog", { name: "카드 목록" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
   });
 
   it("moves whole candidate rows: a direction is enabled only toward a sortable row with the same pin state", async () => {

@@ -221,6 +221,8 @@ export function App() {
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const mobile = useMediaQuery(MOBILE_QUERY);
+  // One flash timer per row wrapper: a repeated jump restarts that row's flash.
+  const flashTimersRef = useRef(new WeakMap<HTMLElement, number>());
 
   // The one writer for shell state: keeps `shellRef` current at the moment of
   // the write itself, not only at the render-time assignment above (which
@@ -603,11 +605,21 @@ export function App() {
   function jumpToCard(cardId: string) {
     const card = document.getElementById(`canvas-card-${cardId}`);
     if (!card) return;
-    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    card.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
     const rowItem = card.closest<HTMLElement>(".canvas-row-item") ?? card;
     rowItem.focus({ preventScroll: true });
     rowItem.setAttribute("data-flash", "true");
-    window.setTimeout(() => rowItem.removeAttribute("data-flash"), 1200);
+    const flashTimers = flashTimersRef.current;
+    const previous = flashTimers.get(rowItem);
+    if (previous !== undefined) window.clearTimeout(previous);
+    flashTimers.set(
+      rowItem,
+      window.setTimeout(() => {
+        rowItem.removeAttribute("data-flash");
+        flashTimers.delete(rowItem);
+      }, 1200),
+    );
     if (mobile) setDrawerOpen(false);
   }
 

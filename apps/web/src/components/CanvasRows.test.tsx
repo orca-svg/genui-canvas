@@ -130,7 +130,8 @@ describe("CanvasRows", () => {
     await screen.findByRole("group", { name: "국가장학금 카드" });
     const band = container.querySelector('[data-value="band:persona"]')!;
     expect(band).not.toHaveAttribute("role");
-    expect(band).not.toHaveAttribute("tabindex");
+    // Out of the tab order (not a dnd-kit button), yet focusable for the card list's jump.
+    expect(band).toHaveAttribute("tabindex", "-1");
     expect(band).not.toHaveAttribute("aria-roledescription");
     expect(band).not.toHaveClass("opacity-50");
   });

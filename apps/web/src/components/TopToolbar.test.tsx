@@ -36,6 +36,8 @@ describe("TopToolbar", () => {
     expect(screen.getByRole("button", { name: "다시 실행" })).toBeDisabled();
     const recompose = screen.getByRole("button", { name: "조작 반영해 재구성" });
     expect(recompose).toHaveTextContent("2");
+    // The visible badge is aria-hidden; screen readers get the count as a description.
+    expect(recompose).toHaveAccessibleDescription("대기 조작 2개");
     await userEvent.click(recompose);
     expect(props.onRecompose).toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "카드 목록" })).toBeNull();
@@ -56,6 +58,7 @@ describe("TopToolbar", () => {
     const recompose = screen.getByRole("button", { name: "조작 반영해 재구성" });
     expect(recompose).toBeDisabled();
     expect(recompose.querySelector(".toolbar__badge")).toBeNull();
+    expect(recompose).not.toHaveAttribute("aria-describedby");
     expect(screen.getByRole("button", { name: "카드 목록" })).toHaveAttribute("aria-expanded", "false");
   });
 });

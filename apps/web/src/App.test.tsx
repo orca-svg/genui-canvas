@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.js";
@@ -247,7 +247,29 @@ function twoCardFetch(options: { alphaHiddenFrom?: number } = {}) {
   return { turnBodies };
 }
 
+/** matchMedia stub: only the listed queries match. */
+function matchMediaFor(...matching: string[]) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: matching.includes(query),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
 afterEach(() => {
+  // jsdom serves requestAnimationFrame from one Node interval created on whichever clock is
+  // active; drain the fake clock so a pending frame cannot stall later tests' Base UI focus.
+  if (vi.isFakeTimers()) {
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+  }
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -1105,8 +1127,61 @@ describe("App", () => {
     const row = results().getByRole("group", { name: "beta 카드" });
     expect(document.activeElement).toBe(row);
     expect(row).toHaveAttribute("data-flash", "true");
-    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center", behavior: "smooth" }));
     scroll.mockRestore();
+  });
+
+  it("scrolls without animation under reduced motion and restarts a row's flash on a repeated jump", async () => {
+    matchMediaFor("(prefers-reduced-motion: reduce)");
+    twoCardFetch();
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("두 번째 혜택")).toBeInTheDocument();
+    const cardList = await openCardList(user);
+    const row = results().getByRole("group", { name: "beta 카드" });
+
+    vi.useFakeTimers();
+    fireEvent.click(cardList.getByRole("button", { name: "beta(으)로 이동" }));
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center", behavior: "auto" }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    fireEvent.click(cardList.getByRole("button", { name: "beta(으)로 이동" }));
+    act(() => {
+      vi.advanceTimersByTime(300); // 1.3s after the first jump, 0.3s after the second
+    });
+    expect(row).toHaveAttribute("data-flash", "true");
+    act(() => {
+      vi.advanceTimersByTime(900);
+    });
+    expect(row).not.toHaveAttribute("data-flash");
+    scroll.mockRestore();
+  });
+
+  it("offers the toolbar's 카드 목록 as the single mobile entry and closes the sheet after a jump", async () => {
+    matchMediaFor("(max-width: 48rem)");
+    twoCardFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
+    expect(await results().findByText("두 번째 혜택")).toBeInTheDocument();
+
+    const entries = screen.getAllByRole("button", { name: "카드 목록" });
+    expect(entries).toHaveLength(1);
+    const entry = within(screen.getByRole("toolbar", { name: "구성 도구" })).getByRole("button", { name: "카드 목록" });
+    expect(entry).toBe(entries[0]);
+    await user.click(entry);
+    const sheet = await screen.findByRole("dialog", { name: "카드 목록" });
+    expect(sheet).toHaveAttribute("data-mode", "sheet");
+    expect(entry).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(sheet.contains(document.activeElement)).toBe(true));
+
+    await user.click(within(sheet).getByRole("button", { name: "beta(으)로 이동" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull());
+    expect(entry).toHaveAttribute("aria-expanded", "false");
+    expect(document.activeElement).toBe(results().getByRole("group", { name: "beta 카드" }));
   });
 });
 
@@ -1165,6 +1240,19 @@ describe("App — interactive catalog", () => {
     expect(turnBodies[1]).toMatchObject({ trigger: { type: "persona.switch", personaId: "senior" } });
     expect(eventBodies.some((e) => e.type === "persona.switch" && (e.payload as { personaId: string }).personaId === "senior")).toBe(true);
     expect((screen.getByRole("combobox", { name: "추천 관점" }) as HTMLSelectElement).value).toBe("senior");
+  });
+
+  it("jumps to a band card from the card list and focuses its wrapper", async () => {
+    interactiveFetch();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    const cardList = await openCardList(user);
+    await user.click(await cardList.findByRole("button", { name: "추천 관점(으)로 이동" }));
+    const band = document.getElementById("canvas-card-personas")?.closest(".canvas-row-item");
+    expect(band).not.toBeNull();
+    expect(document.activeElement).toBe(band);
+    expect(band).toHaveAttribute("data-flash", "true");
   });
 
   it("keeps a hidden card in the shell after recomposition so it can be shown again", async () => {

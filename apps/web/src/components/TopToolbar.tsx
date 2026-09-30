@@ -1,4 +1,4 @@
-import type { ChangeEvent, FormEvent } from "react";
+import { useId, type ChangeEvent, type FormEvent } from "react";
 import { Toolbar } from "@base-ui/react/toolbar";
 import { ListTree, Redo2, RefreshCw, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,8 @@ export interface TopToolbarProps {
  * other shell control.
  */
 export function TopToolbar(p: TopToolbarProps) {
+  const pendingId = useId();
+  const pending = p.pendingCount > 0;
   return (
     <Toolbar.Root className="toolbar" aria-label="구성 도구">
       <Toolbar.Group className="toolbar__group toolbar__group--scenarios" aria-label="시나리오">
@@ -121,18 +123,25 @@ export function TopToolbar(p: TopToolbarProps) {
             render={<Button type="button" size="sm" />}
             className="toolbar__recompose"
             focusableWhenDisabled={false}
+            aria-describedby={pending ? pendingId : undefined}
             disabled={p.disabled || !p.canRecompose}
             onClick={p.onRecompose}
           >
             <RefreshCw aria-hidden="true" />
             조작 반영해 재구성
-            {p.pendingCount > 0 && (
+            {pending && (
               <span className="toolbar__badge" aria-hidden="true">
                 {p.pendingCount}
               </span>
             )}
           </Toolbar.Button>
         </Tooltip>
+        {/* The badge is decorative; the count reaches screen readers as the button's description. */}
+        {pending && (
+          <span id={pendingId} className="sr-only">
+            대기 조작 {p.pendingCount}개
+          </span>
+        )}
         {p.showCardList && (
           <Toolbar.Button
             render={<Button type="button" variant="outline" size="sm" />}

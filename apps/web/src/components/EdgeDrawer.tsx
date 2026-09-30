@@ -65,6 +65,9 @@ export function rowNeighbour(rows: readonly CanvasRow[], card: ShellCard, direct
 export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onExpand, onMoveRow, onJump }: EdgeDrawerProps) {
   const mobile = useMediaQuery(MOBILE_QUERY);
   const [locked, setLocked] = useState(false);
+  // A hover open must not take keyboard focus (the user may be typing elsewhere); a handle
+  // or toolbar open still moves focus into the drawer.
+  const [openedByHover, setOpenedByHover] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clear = () => {
@@ -77,7 +80,10 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
   const scheduleOpen = (event: PointerEvent) => {
     if (event.pointerType === "touch") return;
     clear();
-    timer.current = setTimeout(() => onOpenChange(true), OPEN_DELAY_MS);
+    timer.current = setTimeout(() => {
+      setOpenedByHover(true);
+      onOpenChange(true);
+    }, OPEN_DELAY_MS);
   };
   const scheduleClose = (event: PointerEvent) => {
     if (locked || event.pointerType === "touch") return;
@@ -90,9 +96,12 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
     if (!open) return;
     scheduleClose(event);
   };
-  // The lock belongs to one opening: whatever closes the drawer (Esc, the handle, a parent) releases it.
+  // The lock and the hover origin belong to one opening: whatever closes the drawer (Esc, the handle, a parent) releases them.
   useEffect(() => {
-    if (!open) setLocked(false);
+    if (!open) {
+      setLocked(false);
+      setOpenedByHover(false);
+    }
   }, [open]);
   useEffect(
     () => () => {
@@ -110,21 +119,25 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
       {!mobile && (
         <div className="edge-zone" data-testid="edge-zone" aria-hidden="true" onPointerEnter={scheduleOpen} onPointerLeave={leaveZone} />
       )}
-      <button
-        type="button"
-        className="edge-handle"
-        aria-label="카드 목록"
-        aria-expanded={open}
-        aria-controls="edge-drawer"
-        data-open={open}
-        onClick={() => {
-          clear();
-          onOpenChange(!open);
-        }}
-      >
-        <PanelRightOpen aria-hidden="true" />
-        <span className="edge-handle__text">카드 목록</span>
-      </button>
+      {/* Under 48rem the toolbar's 카드 목록 is the single entry, so the handle is desktop-only. */}
+      {!mobile && (
+        <button
+          type="button"
+          className="edge-handle"
+          aria-label="카드 목록"
+          aria-expanded={open}
+          aria-controls="edge-drawer"
+          data-open={open}
+          onClick={() => {
+            clear();
+            setOpenedByHover(false);
+            onOpenChange(!open);
+          }}
+        >
+          <PanelRightOpen aria-hidden="true" />
+          <span className="edge-handle__text">카드 목록</span>
+        </button>
+      )}
       <Drawer
         open={open}
         modal={false}
@@ -136,7 +149,13 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
           onOpenChange(next);
         }}
       >
-        <DrawerContent id="edge-drawer" data-mode={mobile ? "sheet" : "side"} onPointerEnter={clear} onPointerLeave={scheduleClose}>
+        <DrawerContent
+          id="edge-drawer"
+          data-mode={mobile ? "sheet" : "side"}
+          initialFocus={openedByHover ? false : undefined}
+          onPointerEnter={clear}
+          onPointerLeave={scheduleClose}
+        >
           <header className="edge-drawer__header">
             <DrawerTitle className="edge-drawer__title">카드 목록</DrawerTitle>
             <div className="edge-drawer__tools">

@@ -261,7 +261,8 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
               {...NO_DND_ATTRIBUTES}
             />
           ) : (
-            <div role={undefined} tabIndex={undefined} {...NO_DND_ATTRIBUTES} />
+            // tabIndex -1: out of the tab order, but the card list's jump can focus a band.
+            <div role={undefined} tabIndex={-1} {...NO_DND_ATTRIBUTES} />
           )
         }
       >

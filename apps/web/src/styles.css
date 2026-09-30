@@ -324,8 +324,6 @@ input:disabled {
 .edge-drawer__badges span { margin-left: 0.25rem; border-radius: 999px; background: #eef2f9; padding: 0.0625rem 0.4rem; font-size: 0.7rem; font-weight: 700; color: #4b5d7d; }
 .edge-drawer__list [data-slot="attachment"] { width: 100%; max-width: 100%; }
 @media (max-width: 48rem) {
-  .edge-handle { top: auto; bottom: 1rem; right: 1rem; transform: none; border-right: 1px solid #b9c5d8; border-radius: 999px; min-height: 2.75rem; }
-  .edge-handle[data-open="true"] { z-index: 41; right: 1rem; } /* the sheet covers it; the sheet has its own close */
   .edge-drawer__list [data-slot="attachment-action"], .edge-drawer__list .card-source-link { min-width: 2.75rem; min-height: 2.75rem; }
 }
 @media (prefers-reduced-motion: reduce) { .edge-drawer, .edge-handle { transition: none; } }
