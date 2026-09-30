@@ -2,7 +2,8 @@
 export {
   CanvasSurfaces,
   type CanvasSurfacesProps,
-  type CanvasCardLayout,
+  type CanvasGroup,
+  type CanvasSlot,
   type CanvasWatch,
   type CanvasValue,
   type CanvasValueChange,

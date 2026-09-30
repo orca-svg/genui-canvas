@@ -242,14 +242,48 @@ input:disabled {
   gap: 0.875rem;
 }
 
-.genui-canvas-surfaces > * {
+.genui-canvas-band {
+  display: grid;
+}
+
+.genui-canvas-row {
+  display: grid;
+  grid-template-columns: minmax(20rem, 26rem) repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.genui-canvas-card,
+.genui-canvas-slot--empty {
   min-width: 0;
+}
+
+.genui-canvas-card {
   overflow-wrap: anywhere;
   border: 1px solid #d6deea;
   border-radius: 0.875rem;
   background: #fff;
   box-shadow: 0 0.25rem 1rem rgb(29 50 86 / 6%);
   padding: clamp(0.875rem, 3vw, 1.125rem);
+}
+
+.genui-canvas-slot--empty {
+  border: 1px dashed #d6deea;
+  border-radius: 0.875rem;
+  min-height: 4rem;
+  color: #7a889f;
+  font-size: 0.8125rem;
+  padding: 0.75rem;
+}
+
+@media (max-width: 48rem) {
+  .genui-canvas-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .genui-canvas-slot--empty:empty {
+    display: none;
+  }
 }
 
 .genui-canvas-card[data-expanded="true"] {

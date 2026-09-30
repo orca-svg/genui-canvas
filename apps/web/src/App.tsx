@@ -31,6 +31,7 @@ import {
   type TurnBody,
 } from "./api/client.js";
 import { CardFrame } from "./components/CardFrame.js";
+import { deriveCanvasGroups, ROW_COLUMNS } from "./state/canvas-layout.js";
 
 interface Scenario {
   label: string;
@@ -223,11 +224,10 @@ export function App() {
     setShell(next);
   }
 
-  // The canvas follows the shell instantly: shell order (pinned first), hidden
-  // cards dropped, expanded flag passed through — no server round-trip.
-  const layout = shell.cards
-    .filter((c) => !c.hidden)
-    .map((c) => ({ cardId: c.cardId, expanded: c.expanded, emphasis: c.emphasis }));
+  // The canvas follows the shell instantly: bands and candidate rows derived
+  // from shell order (hidden cards dropped, expanded flag passed through) — no
+  // server round-trip.
+  const groups = useMemo(() => deriveCanvasGroups(shell.cards), [shell]);
   const checklistCards = useMemo(
     () => shell.cards.filter((c) => c.componentType === "Checklist" && typeof c.itemCount === "number"),
     [shell],
@@ -659,7 +659,8 @@ export function App() {
         >
           <CanvasSurfaces
             messages={messages}
-            layout={layout}
+            groups={groups}
+            rowColumns={ROW_COLUMNS}
             onAction={handleCanvasAction}
             watch={watch}
             values={values}

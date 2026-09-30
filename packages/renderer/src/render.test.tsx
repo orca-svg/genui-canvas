@@ -29,6 +29,22 @@ const benefitCardMessages = [
   },
 ];
 
+// Two independent one-Text surfaces, "a" and "b", for grouping tests.
+function twoSurfaces() {
+  const surface = (surfaceId: string, text: string) => [
+    { version: "v0.9", createSurface: { surfaceId, catalogId: basicCatalog.id } },
+    {
+      version: "v0.9",
+      updateComponents: {
+        surfaceId,
+        components: [{ id: "root", component: "Text", text: { path: "/t" } }],
+      },
+    },
+    { version: "v0.9", updateDataModel: { surfaceId, path: "/", value: { t: text } } },
+  ];
+  return [...surface("a", "에이"), ...surface("b", "비")];
+}
+
 describe("createProcessor", () => {
   it("builds a processor with one surface from createSurface", () => {
     const processor = createProcessor(benefitCardMessages);
@@ -70,9 +86,15 @@ describe("CanvasSurfaces", () => {
     { version: "v0.9", updateDataModel: { surfaceId: "card-2", path: "/", value: { t: "둘째" } } },
   ];
 
-  it("renders cards in the layout order, not the message order", async () => {
+  const band = (cardId: string, extra: { expanded?: boolean; emphasis?: "primary" | "secondary" } = {}) => ({
+    key: `band:${cardId}`,
+    kind: "band" as const,
+    slots: [{ cardId, column: "band", ...extra }],
+  });
+
+  it("renders cards in the group order, not the message order", async () => {
     const { container } = render(
-      <CanvasSurfaces messages={twoCards} layout={[{ cardId: "card-2" }, { cardId: "card-1" }]} />,
+      <CanvasSurfaces messages={twoCards} groups={[band("card-2"), band("card-1")]} />,
     );
     await screen.findByText("둘째");
     const ids = [...container.querySelectorAll(".genui-canvas-card")].map((el) =>
@@ -81,10 +103,8 @@ describe("CanvasSurfaces", () => {
     expect(ids).toEqual(["card-2", "card-1"]);
   });
 
-  it("omits cards missing from the layout (hidden)", async () => {
-    const { container } = render(
-      <CanvasSurfaces messages={twoCards} layout={[{ cardId: "card-1" }]} />,
-    );
+  it("omits cards missing from the groups (hidden)", async () => {
+    const { container } = render(<CanvasSurfaces messages={twoCards} groups={[band("card-1")]} />);
     await screen.findByText("첫째");
     const ids = [...container.querySelectorAll(".genui-canvas-card")].map((el) =>
       el.getAttribute("data-card-id"),
@@ -96,7 +116,7 @@ describe("CanvasSurfaces", () => {
     const { container } = render(
       <CanvasSurfaces
         messages={twoCards}
-        layout={[{ cardId: "card-1", expanded: true }, { cardId: "card-2", expanded: false }]}
+        groups={[band("card-1", { expanded: true }), band("card-2", { expanded: false })]}
       />,
     );
     await screen.findByText("첫째");
@@ -218,11 +238,94 @@ describe("CanvasSurfaces — interactive primitives", () => {
 
   it("exposes emphasis on the card wrapper for styling", async () => {
     const { container } = render(
-      <CanvasSurfaces messages={benefitCardMessages} layout={[{ cardId: "card-1", emphasis: "primary" }]} />,
+      <CanvasSurfaces
+        messages={benefitCardMessages}
+        groups={[
+          {
+            key: "band:card-1",
+            kind: "band",
+            slots: [{ cardId: "card-1", column: "band", emphasis: "primary" }],
+          },
+        ]}
+      />,
     );
     // Text's markdown renderer resolves asynchronously; await it (as the other
     // tests in this file do) so the update lands inside act() before asserting.
     await screen.findByText("국가장학금");
     expect(container.querySelector('[data-card-id="card-1"]')?.getAttribute("data-emphasis")).toBe("primary");
+  });
+});
+
+describe("CanvasSurfaces — groups, chrome and empty slots", () => {
+  it("renders groups in group order with band and row wrappers", async () => {
+    render(
+      <CanvasSurfaces
+        messages={twoSurfaces()}
+        rowColumns={["benefit", "score"]}
+        groups={[
+          { key: "row:x", kind: "row", slots: [{ cardId: "b", column: "benefit" }] },
+          { key: "band:a", kind: "band", slots: [{ cardId: "a", column: "band" }] },
+        ]}
+      />,
+    );
+    const wrappers = await screen.findAllByTestId(/^group-/);
+    expect(wrappers.map((el) => el.dataset.groupKey)).toEqual(["row:x", "band:a"]);
+    const row = wrappers[0]!;
+    expect(row).toHaveClass("genui-canvas-row");
+    expect(row.dataset.columns).toBe("2");
+    const cells = Array.from(row.children) as HTMLElement[];
+    expect(cells.map((c) => c.dataset.column)).toEqual(["benefit", "score"]);
+    expect(cells[0]).toHaveClass("genui-canvas-card");
+    expect(cells[1]).toHaveClass("genui-canvas-slot--empty");
+  });
+
+  it("renders chrome before the body and empty-slot content in empty cells", async () => {
+    render(
+      <CanvasSurfaces
+        messages={twoSurfaces()}
+        rowColumns={["benefit", "score"]}
+        groups={[{ key: "row:x", kind: "row", slots: [{ cardId: "a", column: "benefit" }] }]}
+        renderChrome={(slot) => <button type="button">{slot.cardId} 고정</button>}
+        renderEmptySlot={(column) => <span>{column} 자리</span>}
+      />,
+    );
+    const card = await screen.findByTestId("card-a");
+    expect(card.firstElementChild).toContainElement(screen.getByRole("button", { name: "a 고정" }));
+    expect(card.lastElementChild).toHaveClass("genui-canvas-card__body");
+    expect(screen.getByText("score 자리").closest(".genui-canvas-slot--empty")).not.toBeNull();
+  });
+
+  it("lets the shell wrap a group through renderGroup", async () => {
+    render(
+      <CanvasSurfaces
+        messages={twoSurfaces()}
+        groups={[{ key: "row:x", kind: "row", slots: [{ cardId: "a", column: "benefit" }] }]}
+        renderGroup={(group, content) => <section aria-label={`wrap ${group.key}`}>{content}</section>}
+      />,
+    );
+    expect(await screen.findByRole("region", { name: "wrap row:x" })).toBeInTheDocument();
+  });
+
+  it("omits cards absent from every group (hidden) and keeps a missing surface as an empty cell", async () => {
+    render(
+      <CanvasSurfaces
+        messages={twoSurfaces()}
+        rowColumns={["benefit", "score"]}
+        groups={[
+          {
+            key: "row:x",
+            kind: "row",
+            slots: [
+              { cardId: "b", column: "benefit" },
+              { cardId: "ghost", column: "score" },
+            ],
+          },
+        ]}
+      />,
+    );
+    await screen.findByTestId("card-b");
+    expect(screen.queryByTestId("card-a")).toBeNull();
+    expect(screen.queryByTestId("card-ghost")).toBeNull();
+    expect(document.querySelector('.genui-canvas-slot--empty[data-column="score"]')).not.toBeNull();
   });
 });
