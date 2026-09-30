@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { useState, type MutableRefObject, type ReactElement } from "react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { A2uiMessages } from "@genui-canvas/renderer";
@@ -20,13 +20,22 @@ const initial = () =>
     { cardId: "card-b", entityId: "b", componentType: "BenefitCard", title: "월세 지원" },
   ]);
 
-function Harness({ onManipulate, start = initial() }: { onManipulate?: (a: ShellAction) => void; start?: ShellState }) {
+interface HarnessProps {
+  onManipulate?: (a: ShellAction) => void;
+  start?: ShellState;
+  busy?: boolean;
+  /** Lets a test change the shell from outside the canvas (a global undo, say). */
+  dispatchRef?: MutableRefObject<((a: ShellAction) => void) | null>;
+}
+
+function Harness({ onManipulate, start = initial(), busy = false, dispatchRef }: HarnessProps) {
   const [shell, setShell] = useState(start);
+  if (dispatchRef) dispatchRef.current = (action) => setShell((s) => shellReducer(s, action));
   return (
     <CanvasRows
       cards={shell.cards}
       messages={messages}
-      busy={false}
+      busy={busy}
       onManipulate={(action) => {
         onManipulate?.(action);
         setShell((s) => shellReducer(s, action));
@@ -37,6 +46,13 @@ function Harness({ onManipulate, start = initial() }: { onManipulate?: (a: Shell
       onValueChange={() => {}}
     />
   );
+}
+
+/** Renders and lets the renderer's async markdown pass settle inside act. */
+async function mount(ui: ReactElement) {
+  const result = render(ui);
+  await act(async () => {});
+  return result;
 }
 
 afterEach(() => vi.useRealTimers());
@@ -78,22 +94,28 @@ describe("CanvasRows", () => {
   });
 
   it("hides a row, leaves an undo strip in its place for six seconds, and restores on 되돌리기", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<Harness />);
-    const rowA = await screen.findByRole("group", { name: "국가장학금 카드" });
-    await user.click(within(rowA).getByRole("button", { name: "국가장학금 숨기기" }));
+    // Mount on real timers, then fake them: fireEvent + a plain fake clock keep
+    // the six-second boundary exact (RTL's async helpers hang under vitest fake
+    // timers, and shouldAdvanceTime would let real time leak in).
+    await mount(<Harness />);
+    vi.useFakeTimers();
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    fireEvent.click(within(rowA).getByRole("button", { name: "국가장학금 숨기기" }));
     expect(screen.queryByRole("group", { name: "국가장학금 카드" })).toBeNull();
     const strip = screen.getByRole("status", { name: "숨김 안내" });
     expect(strip).toHaveTextContent("국가장학금을 숨겼습니다");
     // the strip sits where the row was: immediately before 월세 지원
     const rowB = screen.getByRole("group", { name: "월세 지원 카드" });
     expect(strip.compareDocumentPosition(rowB) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    await user.click(within(strip).getByRole("button", { name: "되돌리기" }));
-    expect(await screen.findByRole("group", { name: "국가장학금 카드" })).toBeInTheDocument();
-    await user.click(within(screen.getByRole("group", { name: "국가장학금 카드" })).getByRole("button", { name: "국가장학금 숨기기" }));
+    fireEvent.click(within(strip).getByRole("button", { name: "되돌리기" }));
+    expect(screen.getByRole("group", { name: "국가장학금 카드" })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("group", { name: "국가장학금 카드" })).getByRole("button", { name: "국가장학금 숨기기" }));
     act(() => {
-      vi.advanceTimersByTime(6000);
+      vi.advanceTimersByTime(5999);
+    });
+    expect(screen.getByRole("status", { name: "숨김 안내" })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1);
     });
     expect(screen.queryByRole("status", { name: "숨김 안내" })).toBeNull();
   });
@@ -122,5 +144,119 @@ describe("CanvasRows", () => {
     const rowA = await screen.findByRole("group", { name: "국가장학금 카드" });
     await user.click(within(rowA).getByRole("button", { name: "국가장학금 숨기기" }));
     expect(screen.getAllByRole("status", { name: "숨김 안내" })).toHaveLength(1);
+  });
+
+  it("scopes the drag instructions to the handle, not to the row group", async () => {
+    const start = createShellState("c", [
+      { cardId: "score-x", entityId: "x", componentType: "ScoreBreakdown" },
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국가장학금" },
+    ]);
+    render(<Harness start={start} />);
+    const rowA = await screen.findByRole("group", { name: "국가장학금 카드" });
+    const orphan = screen.getByRole("group", { name: "x 카드" });
+    for (const group of [rowA, orphan]) {
+      expect(group).not.toHaveAttribute("aria-roledescription");
+      expect(group).not.toHaveAttribute("aria-describedby");
+      expect(group).not.toHaveAttribute("aria-disabled");
+    }
+    const handle = within(rowA).getByRole("button", { name: "국가장학금 순서 바꾸기" });
+    expect(handle).toHaveAttribute("aria-roledescription", "sortable");
+    expect(handle).toHaveAttribute("aria-describedby");
+    expect(handle).toHaveAccessibleDescription(/Space/);
+  });
+
+  it("moves focus to 되돌리기 after H, then to the restored row after undo", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const rowA = await screen.findByRole("group", { name: "국가장학금 카드" });
+    rowA.focus();
+    await user.keyboard("h");
+    const undo = within(screen.getByRole("status", { name: "숨김 안내" })).getByRole("button", { name: "되돌리기" });
+    expect(document.activeElement).toBe(undo);
+    await user.click(undo);
+    expect(document.activeElement).toBe(screen.getByRole("group", { name: "국가장학금 카드" }));
+  });
+
+  it("hands focus to the neighbouring row when the focused undo strip expires", async () => {
+    await mount(<Harness />);
+    vi.useFakeTimers();
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    act(() => rowA.focus());
+    fireEvent.keyDown(rowA, { key: "h", code: "KeyH" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "되돌리기" }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(screen.queryByRole("status", { name: "숨김 안내" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("group", { name: "월세 지원 카드" }));
+  });
+
+  it("leaves focus alone when the strip expires while focus is elsewhere", async () => {
+    await mount(<Harness />);
+    vi.useFakeTimers();
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    fireEvent.click(within(rowA).getByRole("button", { name: "국가장학금 숨기기" }));
+    const other = screen.getByRole("button", { name: "월세 지원 더 알아보기" });
+    act(() => other.focus());
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(document.activeElement).toBe(other);
+  });
+
+  it("disables 되돌리기 while busy", async () => {
+    const { rerender } = await mount(<Harness />);
+    fireEvent.click(within(screen.getByRole("group", { name: "국가장학금 카드" })).getByRole("button", { name: "국가장학금 숨기기" }));
+    rerender(<Harness busy />);
+    const undo = screen.getByRole("button", { name: "되돌리기" });
+    expect(undo).toBeDisabled();
+    fireEvent.click(undo);
+    expect(screen.queryByRole("group", { name: "국가장학금 카드" })).toBeNull();
+  });
+
+  it("drops the strip when the card is unhidden some other way (a global undo)", async () => {
+    const dispatchRef: HarnessProps["dispatchRef"] = { current: null };
+    await mount(<Harness dispatchRef={dispatchRef} />);
+    fireEvent.click(within(screen.getByRole("group", { name: "국가장학금 카드" })).getByRole("button", { name: "국가장학금 숨기기" }));
+    expect(screen.getByRole("status", { name: "숨김 안내" })).toBeInTheDocument();
+    act(() => dispatchRef.current!({ type: "card.unhide", cardId: "card-a" }));
+    expect(screen.queryByRole("status", { name: "숨김 안내" })).toBeNull();
+    expect(screen.getByRole("group", { name: "국가장학금 카드" })).toBeInTheDocument();
+    // hiding it again through the shell alone must not resurrect the stale strip
+    act(() => dispatchRef.current!({ type: "card.hide", cardId: "card-a" }));
+    expect(screen.queryByRole("status", { name: "숨김 안내" })).toBeNull();
+  });
+
+  it("matches shortcuts by physical key under a Korean input source", async () => {
+    const seen: ShellAction[] = [];
+    await mount(<Harness onManipulate={(a) => seen.push(a)} />);
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    fireEvent.keyDown(rowA, { key: "ㅔ", code: "KeyP" });
+    fireEvent.keyDown(rowA, { key: "ㄷ", code: "KeyE" });
+    expect(seen).toEqual([
+      { type: "card.pin", cardId: "card-a" },
+      { type: "card.expand", cardId: "card-a" },
+    ]);
+  });
+
+  it("ignores held-down repeats and keys typed into a select inside the row", async () => {
+    const seen: ShellAction[] = [];
+    await mount(<Harness onManipulate={(a) => seen.push(a)} />);
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    fireEvent.keyDown(rowA, { key: "p", code: "KeyP", repeat: true });
+    const select = document.createElement("select");
+    rowA.appendChild(select);
+    fireEvent.keyDown(select, { key: "p", code: "KeyP" });
+    expect(seen).toEqual([]);
+  });
+
+  it("does not swallow keys on a row without a BenefitCard", async () => {
+    const start = createShellState("c", [{ cardId: "score-x", entityId: "x", componentType: "ScoreBreakdown" }]);
+    const seen: ShellAction[] = [];
+    await mount(<Harness start={start} onManipulate={(a) => seen.push(a)} />);
+    const orphan = screen.getByRole("group", { name: "x 카드" });
+    const notPrevented = fireEvent.keyDown(orphan, { key: "p", code: "KeyP", cancelable: true });
+    expect(notPrevented).toBe(true);
+    expect(seen).toEqual([]);
   });
 });

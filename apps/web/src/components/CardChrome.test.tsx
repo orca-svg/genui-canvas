@@ -54,4 +54,12 @@ describe("CardChrome", () => {
     expect(shortcutAction("e")).toBe("expand");
     expect(shortcutAction("x")).toBeNull();
   });
+
+  it("matches the physical key first so shortcuts work under a Korean input source", () => {
+    expect(shortcutAction("ㅔ", "KeyP")).toBe("pin");
+    expect(shortcutAction("ㅗ", "KeyH")).toBe("hide");
+    expect(shortcutAction("ㄷ", "KeyE")).toBe("expand");
+    expect(shortcutAction("x", "KeyX")).toBeNull();
+    expect(shortcutAction("p", "")).toBe("pin");
+  });
 });

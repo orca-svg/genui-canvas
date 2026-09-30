@@ -6,7 +6,20 @@ import type { ShellCard } from "../state/shell-store.js";
 
 export const CARD_SHORTCUTS = { pin: "p", hide: "h", expand: "e" } as const;
 
-export function shortcutAction(key: string): "pin" | "hide" | "expand" | null {
+/**
+ * Maps a keydown to a card action. The physical key (`code`) wins so the
+ * shortcuts keep working under a Korean input source, where `key` is a jamo
+ * ("ㅔ" for P); `key` is the fallback for callers without a `code`.
+ */
+export function shortcutAction(key: string, code?: string): "pin" | "hide" | "expand" | null {
+  switch (code) {
+    case "KeyP":
+      return "pin";
+    case "KeyH":
+      return "hide";
+    case "KeyE":
+      return "expand";
+  }
   switch (key.toLowerCase()) {
     case CARD_SHORTCUTS.pin:
       return "pin";

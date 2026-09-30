@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { GripVertical } from "lucide-react";
 import {
   CanvasSurfaces,
@@ -19,6 +19,19 @@ import { HiddenRowNotice } from "./HiddenRowNotice.js";
 
 const NOTICE_MS = 6000;
 const BOUNDARY_HINT = "고정된 카드는 고정 그룹 안에서만 이동합니다";
+const DRAG_INSTRUCTIONS = "순서를 바꾸려면 Space를 누른 뒤 위·아래 화살표로 옮기고 Enter로 놓습니다. Esc는 취소입니다.";
+
+/**
+ * SortableItem spreads dnd-kit's draggable attributes onto its wrapper, but
+ * the drag listeners live on the handle. The wrapper must not announce
+ * "sortable" or carry the drag instructions, so every group overrides these
+ * (the handle carries them instead).
+ */
+const NO_DND_ATTRIBUTES = {
+  "aria-roledescription": undefined,
+  "aria-describedby": undefined,
+  "aria-disabled": undefined,
+} as const;
 
 export interface CanvasRowsProps {
   cards: ShellCard[];
@@ -33,6 +46,8 @@ export interface CanvasRowsProps {
 
 interface Notice {
   cardId: string;
+  /** Key of the row that was hidden; focus returns to it on undo. */
+  rowKey: string;
   title: string;
   /** Key of the group the hidden row used to precede; null when it was last. */
   beforeKey: string | null;
@@ -60,13 +75,23 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const instructionsId = useId();
+  // Read by timer callbacks, which outlive the render that created them.
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+  const pendingFocusKey = useRef<string | null>(null);
   const activeRow = activeKey ? rowByKey.get(activeKey) : undefined;
   const sortableRows = rows.filter(isRowSortable);
   const mixedPinning = sortableRows.some((row) => row.pinned) && sortableRows.some((row) => !row.pinned);
+  // The strip only means something while its card is still hidden: an undo
+  // from elsewhere (the global 실행 취소) makes it stale, so it is dropped.
+  const noticeStale = notice !== null && cardById.get(notice.cardId)?.hidden !== true;
+  const shownNotice = notice && !noticeStale ? notice : null;
   // The strip is rendered next to a neighbouring group; when no such group is
   // left (the hidden row was the only one, or its neighbour went away too) it
   // falls back to the end of the list so 되돌리기 never disappears early.
-  const noticeAnchor = notice ? (notice.beforeKey ?? notice.afterKey) : null;
+  const noticeAnchor = shownNotice ? (shownNotice.beforeKey ?? shownNotice.afterKey) : null;
   const noticeAnchored = noticeAnchor !== null && keys.includes(noticeAnchor);
 
   useEffect(
@@ -76,6 +101,54 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
     [],
   );
 
+  useEffect(() => {
+    if (noticeStale) dismissNotice();
+  }, [noticeStale]);
+
+  // After an undo the row only exists once the shell has re-rendered.
+  useEffect(() => {
+    const key = pendingFocusKey.current;
+    if (key === null) return;
+    pendingFocusKey.current = null;
+    focusRow(key);
+  });
+
+  function focusRow(key: string | null) {
+    if (!key) return;
+    const wrappers = rootRef.current?.querySelectorAll<HTMLElement>("[data-row-key]") ?? [];
+    Array.from(wrappers)
+      .find((wrapper) => wrapper.dataset.rowKey === key)
+      ?.focus();
+  }
+
+  /** The row closest to `anchor` (itself first, then forward, then backward). */
+  function nearestRowKey(anchor: string | null): string | null {
+    const list = groupsRef.current;
+    const at = anchor ? list.findIndex((group) => group.key === anchor) : -1;
+    if (at === -1) return list.find((group) => group.kind === "row")?.key ?? null;
+    for (let distance = 0; distance < list.length; distance += 1) {
+      if (list[at + distance]?.kind === "row") return list[at + distance]!.key;
+      if (list[at - distance]?.kind === "row") return list[at - distance]!.key;
+    }
+    return null;
+  }
+
+  function dismissNotice() {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = null;
+    setNotice(null);
+  }
+
+  function expireNotice(expired: Notice) {
+    // Focus still on the strip would fall to <body> when it disappears; anywhere
+    // else means the user has moved on, and focus is theirs to keep.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest(".hidden-notice")) {
+      focusRow(nearestRowKey(expired.beforeKey ?? expired.afterKey));
+    }
+    dismissNotice();
+  }
+
   function hideRow(row: CanvasRow) {
     if (!row.benefitCardId) return;
     const index = groups.findIndex((group) => group.key === row.key);
@@ -83,15 +156,22 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
     const previous = groups[index - 1]?.key ?? null;
     onManipulate({ type: "card.hide", cardId: row.benefitCardId });
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
-    setNotice({ cardId: row.benefitCardId, title: row.title, beforeKey: next, afterKey: next ? null : previous });
-    noticeTimer.current = setTimeout(() => setNotice(null), NOTICE_MS);
+    const created: Notice = {
+      cardId: row.benefitCardId,
+      rowKey: row.key,
+      title: row.title,
+      beforeKey: next,
+      afterKey: next ? null : previous,
+    };
+    setNotice(created);
+    noticeTimer.current = setTimeout(() => expireNotice(created), NOTICE_MS);
   }
 
   function undoHide() {
-    if (!notice) return;
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    if (!notice || busy) return;
+    pendingFocusKey.current = notice.rowKey;
     onManipulate({ type: "card.unhide", cardId: notice.cardId });
-    setNotice(null);
+    dismissNotice();
   }
 
   function actOn(row: CanvasRow, action: "pin" | "hide" | "expand") {
@@ -103,9 +183,13 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
   }
 
   function onRowKeyDown(row: CanvasRow, event: KeyboardEvent<HTMLDivElement>) {
-    const target = event.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || event.metaKey || event.ctrlKey || event.altKey) return;
-    const action = shortcutAction(event.key);
+    // No shortcuts mid-drag (H would hide the row being carried), on held-down
+    // repeats, on rows without a BenefitCard (nothing to act on, so the key
+    // keeps its default), inside editable controls, or with a modifier held.
+    if (activeKey || event.repeat || !row.benefitCardId) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if ((event.target as Element).closest("input,textarea,select,[contenteditable]")) return;
+    const action = shortcutAction(event.key, event.code);
     if (!action) return;
     event.preventDefault();
     actOn(row, action);
@@ -124,7 +208,15 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
         handle={
           <SortableItemHandle
             className="card-chrome__handle"
-            render={<button type="button" aria-label={`${row.title} 순서 바꾸기`} disabled={busy} />}
+            render={
+              <button
+                type="button"
+                aria-label={`${row.title} 순서 바꾸기`}
+                aria-roledescription="sortable"
+                aria-describedby={instructionsId}
+                disabled={busy}
+              />
+            }
           >
             <GripVertical aria-hidden="true" />
           </SortableItemHandle>
@@ -147,11 +239,11 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
     const row = group.kind === "row" ? rowByKey.get(group.key) : undefined;
     const sortable = row ? isRowSortable(row) : false;
     const disabled = !sortable || (row !== undefined && rowBlocksDrop(activeRow, row));
-    // SortableItem spreads dnd-kit's draggable attributes (role="button",
-    // tabindex, aria-*) onto its wrapper, and dims every disabled item. A band
-    // is never draggable, so it must not turn into a button that wraps its own
-    // buttons or look permanently disabled; a row keeps only the group role
-    // and dims only while the pinned boundary blocks it (rowBlocksDrop).
+    // SortableItem also spreads role="button" and tabindex onto its wrapper and
+    // dims every disabled item. A band is never draggable, so it must not turn
+    // into a button that wraps its own buttons or look permanently disabled; a
+    // row keeps only the group role and dims only while the pinned boundary
+    // blocks it (rowBlocksDrop). The drag aria-* attributes go on no wrapper.
     const item = (
       <SortableItem
         value={group.key}
@@ -159,23 +251,28 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
         className={sortable ? "canvas-row-item" : "canvas-row-item opacity-100"}
         render={
           row ? (
-            <div role="group" aria-label={`${row.title} 카드`} tabIndex={0} onKeyDown={(event) => onRowKeyDown(row, event)} />
-          ) : (
             <div
-              role={undefined}
-              tabIndex={undefined}
-              aria-disabled={undefined}
-              aria-roledescription={undefined}
-              aria-describedby={undefined}
+              role="group"
+              aria-label={`${row.title} 카드`}
+              tabIndex={0}
+              data-row-key={row.key}
+              onKeyDown={(event) => onRowKeyDown(row, event)}
+              {...NO_DND_ATTRIBUTES}
             />
+          ) : (
+            <div role={undefined} tabIndex={undefined} {...NO_DND_ATTRIBUTES} />
           )
         }
       >
         {content}
       </SortableItem>
     );
-    const before = notice && notice.beforeKey === group.key ? <HiddenRowNotice title={notice.title} onUndo={undoHide} /> : null;
-    const after = notice && notice.afterKey === group.key ? <HiddenRowNotice title={notice.title} onUndo={undoHide} /> : null;
+    const strip =
+      shownNotice && (shownNotice.beforeKey === group.key || shownNotice.afterKey === group.key) ? (
+        <HiddenRowNotice key={shownNotice.cardId} title={shownNotice.title} busy={busy} onUndo={undoHide} />
+      ) : null;
+    const before = shownNotice?.beforeKey === group.key ? strip : null;
+    const after = shownNotice?.afterKey === group.key ? strip : null;
     return (
       <>
         {before}
@@ -192,7 +289,10 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
   };
 
   return (
-    <div className="canvas-rows">
+    <div className="canvas-rows" ref={rootRef}>
+      <p id={instructionsId} className="sr-only">
+        {DRAG_INSTRUCTIONS}
+      </p>
       {activeRow && mixedPinning && (
         <p className="canvas-rows__hint" role="status">
           {BOUNDARY_HINT}
@@ -214,9 +314,7 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
           if (action) onManipulate(action);
         }}
         accessibility={{
-          screenReaderInstructions: {
-            draggable: "순서를 바꾸려면 Space를 누른 뒤 위·아래 화살표로 옮기고 Enter로 놓습니다. Esc는 취소입니다.",
-          },
+          screenReaderInstructions: { draggable: DRAG_INSTRUCTIONS },
           announcements: {
             onDragStart: ({ active }) => {
               const { index, total } = positionOf(active.id);
@@ -246,7 +344,9 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
         />
         <SortableOverlay>{({ value }) => <div className="canvas-row-ghost">{titleOf(value)}</div>}</SortableOverlay>
       </Sortable>
-      {notice && !noticeAnchored && <HiddenRowNotice title={notice.title} onUndo={undoHide} />}
+      {shownNotice && !noticeAnchored && (
+        <HiddenRowNotice key={shownNotice.cardId} title={shownNotice.title} busy={busy} onUndo={undoHide} />
+      )}
     </div>
   );
 }
