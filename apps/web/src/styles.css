@@ -485,3 +485,15 @@ input:disabled {
   .card-chrome button, .card-chrome__source { min-height: 2.75rem; }
 }
 @media (hover: none) { .card-chrome__secondary { opacity: 1; } }
+
+/* Sortable candidate rows, drag handle, and the hide-undo strip. */
+.canvas-rows { display: grid; gap: 0.75rem; }
+.canvas-rows__hint { margin: 0; color: #1f4fb8; font-size: 0.875rem; }
+.canvas-row-item:focus-visible { outline: 3px solid #1f5bd7; outline-offset: 4px; border-radius: 1rem; }
+.card-chrome__handle { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: 0; border-radius: 0.5rem; background: transparent; color: #64748b; cursor: grab; touch-action: none; }
+.card-chrome__handle:active { cursor: grabbing; }
+.card-chrome__handle:hover { background: #edf3ff; }
+.canvas-row-ghost { border-radius: 0.875rem; background: #fff; box-shadow: 0 0.75rem 2rem rgb(29 50 86 / 20%); padding: 0.75rem 1rem; font-weight: 700; }
+.genui-canvas-slot__hint { display: block; }
+.hidden-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; border: 1px dashed #b9c5d8; border-radius: 0.875rem; background: #f6f8fc; padding: 0.625rem 0.875rem; color: #34455f; font-size: 0.875rem; }
+@media (max-width: 48rem) { .card-chrome__handle { width: 2.75rem; height: 2.75rem; } }

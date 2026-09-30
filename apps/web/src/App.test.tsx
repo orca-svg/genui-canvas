@@ -6,6 +6,14 @@ import { App } from "./App.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// The card manipulation controls exist twice while the sidebar and the on-card
+// chrome coexist, so sidebar buttons are queried inside the sidebar.
+const sidebar = () => within(screen.getByRole("complementary", { name: "카드 조작" }));
+// The app's progress line lives in the page header. dnd-kit adds its own
+// role="status" live region inside the canvas, so a page-wide
+// getByRole("status") is ambiguous once sortable rows render.
+const appStatus = () => within(screen.getByRole("banner")).getByRole("status");
+
 function compositionSse(title = "테스트 혜택"): string {
   return compositionSseFor([{ entityId: "test-benefit", title }]);
 }
@@ -208,7 +216,7 @@ describe("App", () => {
       ),
     );
     render(<App />);
-    const status = screen.getByRole("status");
+    const status = appStatus();
     expect(status).toHaveAttribute("aria-live", "polite");
     await waitFor(() => expect(screen.getByRole("button", { name: "혜택 찾기" })).toBeEnabled());
   });
@@ -351,7 +359,7 @@ describe("App", () => {
 
     expect((await screen.findAllByText("사람이 읽는 혜택명")).length).toBeGreaterThanOrEqual(2);
     expect(
-      screen.getByRole("link", { name: "사람이 읽는 혜택명 출처 페이지 열기" }),
+      sidebar().getByRole("link", { name: "사람이 읽는 혜택명 출처 페이지 열기" }),
     ).toHaveAttribute("href", "https://www.gov.kr/benefit/benefit-1");
   });
 
@@ -390,9 +398,9 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
-    await screen.findByRole("button", { name: "동일 혜택 고정" });
-    await user.click(screen.getByRole("button", { name: "동일 혜택 고정" }));
-    await user.click(screen.getByRole("button", { name: "동일 혜택 숨기기" }));
+    await sidebar().findByRole("button", { name: "동일 혜택 고정" });
+    await user.click(sidebar().getByRole("button", { name: "동일 혜택 고정" }));
+    await user.click(sidebar().getByRole("button", { name: "동일 혜택 숨기기" }));
     await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
 
     await waitFor(() => expect(turnBodies).toHaveLength(2));
@@ -408,7 +416,7 @@ describe("App", () => {
         ],
       },
     });
-    expect(await screen.findByRole("button", { name: "동일 혜택 고정 해제" })).toHaveAttribute(
+    expect(await sidebar().findByRole("button", { name: "동일 혜택 고정 해제" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -454,18 +462,18 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
-    await screen.findByRole("button", { name: "alpha 고정" });
-    await user.click(screen.getByRole("button", { name: "alpha 고정" }));
+    await sidebar().findByRole("button", { name: "alpha 고정" });
+    await user.click(sidebar().getByRole("button", { name: "alpha 고정" }));
     await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
 
     await waitFor(() => expect(turnBodies).toHaveLength(2));
-    expect(await screen.findByRole("button", { name: "alpha 고정 해제" })).toHaveAttribute(
+    expect(await sidebar().findByRole("button", { name: "alpha 고정 해제" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     // beta is a brand-new entity: it must not inherit alpha's pin just
     // because the provider happened to reuse alpha's old card id for it.
-    expect(screen.getByRole("button", { name: "beta 고정" })).toHaveAttribute(
+    expect(sidebar().getByRole("button", { name: "beta 고정" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -552,7 +560,7 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("2개 카드를 구성했습니다."),
+      expect(appStatus()).toHaveTextContent("2개 카드를 구성했습니다."),
     );
   });
 
@@ -583,7 +591,7 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
+      expect(appStatus()).toHaveTextContent(
         "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 조작’에서 ‘다시 보기’로 표시할 수 있습니다.",
       ),
     );
@@ -666,7 +674,7 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("테스트 혜택")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "test-benefit 고정" }));
+    await user.click(sidebar().getByRole("button", { name: "test-benefit 고정" }));
     await user.click(screen.getByRole("button", { name: "조작 반영해 재구성" }));
     await waitFor(() => expect(releasePin).toBeTypeOf("function"));
     expect(turnCount).toBe(1);
@@ -801,18 +809,18 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "beta 고정" }));
-    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(sidebar().getByRole("button", { name: "beta 고정" }));
+    expect(sidebar().getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "beta 아래로 이동" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "alpha 위로 이동" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "실행 취소" }));
-    expect(screen.getByRole("button", { name: "beta 고정" })).toHaveAttribute("aria-pressed", "false");
+    expect(sidebar().getByRole("button", { name: "beta 고정" })).toHaveAttribute("aria-pressed", "false");
     expect([...container.querySelectorAll(".genui-canvas-card")].map((card) => card.getAttribute("data-card-id"))).toEqual([
       "card-alpha",
       "card-beta",
     ]);
     await user.click(screen.getByRole("button", { name: "다시 실행" }));
-    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
+    expect(sidebar().getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute("aria-pressed", "true");
 
     await waitFor(() => expect(eventBodies).toHaveLength(6));
     expect(eventBodies.slice(2).map((event) => event.type)).toEqual([
@@ -853,8 +861,8 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
 
-    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
-    const hideAlpha = screen.getByRole("button", { name: "alpha 숨기기" });
+    const pinBeta = sidebar().getByRole("button", { name: "beta 고정" });
+    const hideAlpha = sidebar().getByRole("button", { name: "alpha 숨기기" });
     // fireEvent.click flushes (and re-renders) after every call, so it cannot
     // reproduce two manipulations landing in the same JS tick. A raw DOM
     // click inside one `act` batch does: React queues both state updates
@@ -865,7 +873,7 @@ describe("App", () => {
       hideAlpha.click();
     });
 
-    expect(screen.getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute(
+    expect(sidebar().getByRole("button", { name: "beta 고정 해제" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -908,7 +916,7 @@ describe("App", () => {
     expect(await screen.findByText("첫 번째 혜택")).toBeInTheDocument();
     await waitFor(() => expect(turnBodies).toHaveLength(1));
 
-    const pinBeta = screen.getByRole("button", { name: "beta 고정" });
+    const pinBeta = sidebar().getByRole("button", { name: "beta 고정" });
     const secondScenario = screen.getByRole("button", { name: "청년 구직자" });
     // Same same-tick reasoning as the manipulation test above: a raw click
     // inside one `act` batch pins beta and selects the second scenario
@@ -998,7 +1006,7 @@ describe("App — interactive catalog", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
     expect(await screen.findByText("혜택 A")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장");
+    expect(appStatus()).toHaveTextContent("테스트 의도 문장");
   });
 
   it("records checklist ticks as trace events and undoes them with the inverse event", async () => {
@@ -1092,7 +1100,7 @@ describe("App — interactive catalog", () => {
       ),
     );
     release();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+    await waitFor(() => expect(appStatus()).toHaveTextContent("테스트 의도 문장"));
   });
 
   it("ignores a composed persona button while a turn is busy", async () => {
@@ -1142,7 +1150,7 @@ describe("App — interactive catalog", () => {
     // canvas renderer has no notion of `busy` (only the sidebar controls are
     // disabled by it), so this button stays clickable and App must ignore it.
     await user.click(screen.getByRole("button", { name: "청년 구직자" }));
-    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(appStatus()).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
     expect(turnBodies).toHaveLength(2);
     expect(eventBodies).toHaveLength(3);
 
@@ -1158,13 +1166,13 @@ describe("App — interactive catalog", () => {
     // the two guards. The guard in `handleCanvasAction` is load-bearing for
     // an *invalid* action instead (untestable through this DOM pipeline; see
     // that guard's comment).
-    expect(screen.getByRole("status")).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
+    expect(appStatus()).toHaveTextContent("추천 후보를 검색하고 구성 중입니다…");
     expect(personaSelect.value).toBe("youth_jobseeker");
     expect(turnBodies).toHaveLength(2);
     expect(eventBodies).toHaveLength(3);
 
     release();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("테스트 의도 문장"));
+    await waitFor(() => expect(appStatus()).toHaveTextContent("테스트 의도 문장"));
   });
 
   it("hides a currently visible card when the next composition ships it in the hidden tail", async () => {
@@ -1307,9 +1315,9 @@ describe("App — interactive catalog", () => {
     const rejected = eventBodies.filter((e) => e.type === "composition.rejected");
     expect(rejected.map((e) => e.seq)).toEqual([4, 5]);
     expect(rejected[1]).toMatchObject({ payload: { reason: "turn_failed" } });
-    expect(screen.getByRole("status")).toHaveTextContent("추천을 갱신하지 못했습니다");
+    expect(appStatus()).toHaveTextContent("추천을 갱신하지 못했습니다");
 
-    await user.click(await screen.findByRole("button", { name: "혜택 A 고정" }));
+    await user.click(await sidebar().findByRole("button", { name: "혜택 A 고정" }));
     await waitFor(() => expect(eventBodies.at(-1)).toMatchObject({ type: "card.pin", seq: 6 }));
   });
 });

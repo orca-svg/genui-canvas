@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
-  CanvasSurfaces,
   type A2uiMessages,
   type CanvasActionEvent,
   type CanvasValueChange,
@@ -30,8 +29,8 @@ import {
   type SessionHandle,
   type TurnBody,
 } from "./api/client.js";
+import { CanvasRows } from "./components/CanvasRows.js";
 import { CardFrame } from "./components/CardFrame.js";
-import { deriveCanvasGroups, ROW_COLUMNS } from "./state/canvas-layout.js";
 
 interface Scenario {
   label: string;
@@ -224,10 +223,6 @@ export function App() {
     setShell(next);
   }
 
-  // The canvas follows the shell instantly: bands and candidate rows derived
-  // from shell order (hidden cards dropped, expanded flag passed through) — no
-  // server round-trip.
-  const groups = useMemo(() => deriveCanvasGroups(shell.cards), [shell]);
   const checklistCards = useMemo(
     () => shell.cards.filter((c) => c.componentType === "Checklist" && typeof c.itemCount === "number"),
     [shell],
@@ -657,10 +652,11 @@ export function App() {
           aria-label="추천 결과"
           tabIndex={-1}
         >
-          <CanvasSurfaces
+          <CanvasRows
+            cards={shell.cards}
             messages={messages}
-            groups={groups}
-            rowColumns={ROW_COLUMNS}
+            busy={busy}
+            onManipulate={manipulate}
             onAction={handleCanvasAction}
             watch={watch}
             values={values}
