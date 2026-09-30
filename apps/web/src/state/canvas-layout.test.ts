@@ -66,6 +66,32 @@ describe("deriveCanvasGroups", () => {
     expect(row!.slots[0]).toMatchObject({ expanded: true });
   });
 
+  it("hides the whole row when its BenefitCard is hidden, keeping sub-cards in the shell", () => {
+    let cards = init([
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard" },
+      { cardId: "score-a", entityId: "a", componentType: "ScoreBreakdown" },
+      { cardId: "card-b", entityId: "b", componentType: "BenefitCard" },
+    ]);
+    cards = shellReducer({ compositionId: "c", cards }, { type: "card.hide", cardId: "card-a" }).cards;
+    expect(deriveCanvasGroups(cards).map((g) => g.key)).toEqual(["row:b"]);
+    expect(cards.find((c) => c.cardId === "score-a")?.hidden).toBe(false);
+    cards = shellReducer({ compositionId: "c", cards }, { type: "card.unhide", cardId: "card-a" }).cards;
+    expect(deriveCanvasGroups(cards).map((g) => g.key)).toEqual(["row:a", "row:b"]);
+  });
+
+  it("sorts row slots by the fixed column order and keeps only the first card per column", () => {
+    const cards = init([
+      { cardId: "checklist-a", entityId: "a", componentType: "Checklist" },
+      { cardId: "score-a", entityId: "a", componentType: "ScoreBreakdown" },
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard" },
+      { cardId: "score-a-2", entityId: "a", componentType: "ScoreBreakdown" },
+    ]);
+    const [row] = rowsOf(deriveCanvasGroups(cards));
+    expect(row!.slots.map((s) => s.column)).toEqual(["benefit", "score", "checklist"]);
+    expect(row!.slots.find((s) => s.column === "score")?.cardId).toBe("score-a");
+    expect(row!.slots.map((s) => s.cardId)).not.toContain("score-a-2");
+  });
+
   it("exposes the fixed column order", () => {
     expect([...ROW_COLUMNS]).toEqual(["benefit", "score", "checklist", "source"]);
   });

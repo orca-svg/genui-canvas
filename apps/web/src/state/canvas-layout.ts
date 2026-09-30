@@ -45,10 +45,20 @@ const slotOf = (card: ShellCard, column: string): CanvasSlot => ({
 /**
  * Bands first (PersonaSelector), candidate rows in the order their anchor
  * card appears in the shell (BenefitCard, else the first card of the entity),
- * DeadlineList bands last. Hidden cards never enter a group.
+ * DeadlineList bands last. Hidden cards never enter a group; a hidden
+ * BenefitCard also keeps its entity's sub-cards out (the whole row disappears).
  */
 export function deriveCanvasGroups(cards: readonly ShellCard[]): CanvasGroup[] {
-  const visible = cards.filter((card) => !card.hidden);
+  const hiddenEntities = new Set(
+    cards.flatMap((card) =>
+      card.componentType === "BenefitCard" && card.hidden && card.entityId ? [card.entityId] : [],
+    ),
+  );
+  const visible = cards.filter(
+    (card) =>
+      !card.hidden &&
+      !(COLUMN_OF[card.componentType] && card.entityId && hiddenEntities.has(card.entityId)),
+  );
   const leading: CanvasBand[] = [];
   const trailing: CanvasBand[] = [];
   const middle: Array<{ anchorIndex: number; group: CanvasGroup }> = [];
