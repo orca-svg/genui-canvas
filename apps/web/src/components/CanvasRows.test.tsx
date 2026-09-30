@@ -55,7 +55,20 @@ async function mount(ui: ReactElement) {
   return result;
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  // jsdom serves requestAnimationFrame from one Node interval, created on whichever clock is
+  // active when the first frame is requested. A frame left pending on the fake clock would
+  // stall every later frame in this file (and Base UI's focus handling with it), so the fake
+  // clock is drained before the real one comes back.
+  if (vi.isFakeTimers()) {
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+  }
+  vi.useRealTimers();
+});
+
+const EMPTY_TEXT = "보이는 카드가 없습니다 · 카드 목록에서 다시 볼 수 있습니다.";
 
 describe("CanvasRows", () => {
   it("renders one focusable row per candidate with its chrome and a drag handle", async () => {
@@ -304,5 +317,69 @@ describe("CanvasRows", () => {
     const notPrevented = fireEvent.keyDown(orphan, { key: "p", code: "KeyP", cancelable: true });
     expect(notPrevented).toBe(true);
     expect(seen).toEqual([]);
+  });
+
+  it("picks the object particle from the title and describes 되돌리기 with the strip's sentence", async () => {
+    const start = createShellState("c", [
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국민취업지원제도" },
+    ]);
+    await mount(<Harness start={start} />);
+    fireEvent.click(screen.getByRole("button", { name: "국민취업지원제도 숨기기" }));
+    const strip = screen.getByRole("status", { name: "숨김 안내" });
+    expect(strip).toHaveTextContent("국민취업지원제도를 숨겼습니다 · 카드 목록에서 다시 볼 수 있습니다.");
+    expect(within(strip).getByRole("button", { name: "되돌리기" })).toHaveAccessibleDescription(
+      "국민취업지원제도를 숨겼습니다 · 카드 목록에서 다시 볼 수 있습니다.",
+    );
+  });
+
+  it("says no card is visible once every card is hidden, but not before any card arrives", async () => {
+    const { unmount } = await mount(<Harness start={createShellState("c", [])} />);
+    expect(screen.queryByText(EMPTY_TEXT)).toBeNull();
+    unmount();
+    const allHidden = createShellState("c", [
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국가장학금", hidden: true },
+    ]);
+    await mount(<Harness start={allHidden} />);
+    expect(screen.getByText(EMPTY_TEXT)).toBeInTheDocument();
+  });
+
+  it("hands focus to the no-visible-card sentence when the focused strip of the last row expires", async () => {
+    const start = createShellState("c", [
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국가장학금" },
+    ]);
+    await mount(<Harness start={start} />);
+    vi.useFakeTimers();
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    act(() => rowA.focus());
+    fireEvent.keyDown(rowA, { key: "h", code: "KeyH" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "되돌리기" }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    expect(screen.queryByRole("status", { name: "숨김 안내" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByText(EMPTY_TEXT));
+  });
+
+  it("advertises P/H/E on a row that has a BenefitCard, and only there", async () => {
+    const start = createShellState("c", [
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국가장학금" },
+      { cardId: "score-x", entityId: "x", componentType: "ScoreBreakdown" },
+    ]);
+    await mount(<Harness start={start} />);
+    expect(screen.getByRole("group", { name: "국가장학금 카드" })).toHaveAttribute("aria-keyshortcuts", "P H E");
+    expect(screen.getByRole("group", { name: "x 카드" })).not.toHaveAttribute("aria-keyshortcuts");
+  });
+
+  it("stacks the drag ghost above the card list drawer (z 50) and its handle (z 51)", async () => {
+    // dnd-kit's DragOverlay writes its `zIndex` prop (default 999) as an inline style,
+    // which outranks the vendored overlay's `z-50` class.
+    const user = userEvent.setup();
+    render(<Harness />);
+    const rowA = await screen.findByRole("group", { name: "국가장학금 카드" });
+    within(rowA).getByRole("button", { name: "국가장학금 순서 바꾸기" }).focus();
+    await user.keyboard(" ");
+    const ghost = await screen.findByText("국가장학금", { selector: ".canvas-row-ghost" });
+    expect(Number(ghost.parentElement!.style.zIndex)).toBeGreaterThan(51);
+    await user.keyboard("{Escape}");
   });
 });

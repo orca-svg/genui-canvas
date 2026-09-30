@@ -11,6 +11,7 @@ import {
   type CanvasWatch,
 } from "@genui-canvas/renderer";
 import { Sortable, SortableItem, SortableItemHandle, SortableOverlay } from "@/components/reui/sortable";
+import { withParticle } from "@/lib/korean";
 import { deriveCanvasGroups, rowsOf, ROW_COLUMNS, type CanvasRow } from "../state/canvas-layout.js";
 import { isRowSortable, planRowMove, rowBlocksDrop } from "../state/drag-reorder.js";
 import type { ShellAction, ShellCard } from "../state/shell-store.js";
@@ -20,6 +21,7 @@ import { HiddenRowNotice } from "./HiddenRowNotice.js";
 const NOTICE_MS = 6000;
 const BOUNDARY_HINT = "고정된 카드는 고정 그룹 안에서만 이동합니다";
 const DRAG_INSTRUCTIONS = "순서를 바꾸려면 Space를 누른 뒤 위·아래 화살표로 옮기고 Enter로 놓습니다. Esc는 취소입니다.";
+const ALL_HIDDEN = "보이는 카드가 없습니다 · 카드 목록에서 다시 볼 수 있습니다.";
 
 /**
  * SortableItem spreads dnd-kit's draggable attributes onto its wrapper, but
@@ -91,6 +93,7 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
   const [notice, setNotice] = useState<Notice | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const allHiddenRef = useRef<HTMLParagraphElement>(null);
   const instructionsId = useId();
   // Read by timer callbacks, which outlive the render that created them.
   const groupsRef = useRef(groups);
@@ -159,7 +162,10 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
     // else means the user has moved on, and focus is theirs to keep.
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.closest(".hidden-notice")) {
-      focusRow(nearestRowKey(expired.beforeKey ?? expired.afterKey));
+      const key = nearestRowKey(expired.beforeKey ?? expired.afterKey);
+      // No row left to take it: the sentence saying so does (it renders when nothing is visible).
+      if (key) focusRow(key);
+      else allHiddenRef.current?.focus();
     }
     dismissNotice();
   }
@@ -271,6 +277,7 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
               aria-label={`${row.title} 카드`}
               tabIndex={0}
               data-row-key={row.key}
+              aria-keyshortcuts={row.benefitCardId ? "P H E" : undefined}
               onKeyDown={(event) => onRowKeyDown(row, event)}
               {...NO_DND_ATTRIBUTES}
             />
@@ -299,6 +306,7 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
   };
 
   const titleOf = (id: string | number) => rowByKey.get(String(id))?.title ?? String(id);
+  const objectOf = (id: string | number) => withParticle(titleOf(id), "을/를");
   const positionOf = (id: string | number) => {
     const sortableKeys = sortableRows.map((row) => row.key);
     return { index: sortableKeys.indexOf(String(id)) + 1, total: sortableKeys.length };
@@ -309,6 +317,11 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
       <p id={instructionsId} className="sr-only">
         {DRAG_INSTRUCTIONS}
       </p>
+      {cards.length > 0 && groups.length === 0 && (
+        <p className="canvas__empty" tabIndex={-1} ref={allHiddenRef}>
+          {ALL_HIDDEN}
+        </p>
+      )}
       {activeRow && mixedPinning && (
         <p className="canvas-rows__hint" role="status">
           {BOUNDARY_HINT}
@@ -323,6 +336,9 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
         onDragEnd={() => setActiveKey(null)}
         onDragCancel={() => setActiveKey(null)}
         onMove={({ activeIndex, overIndex }) => {
+          // The handle is disabled while a turn is in flight, but a drag that still ends
+          // then (say, a touch drag) must not record a move the incoming composition replaces.
+          if (busy) return;
           const active = keys[activeIndex];
           const over = keys[overIndex];
           if (!active || !over) return;
@@ -334,14 +350,14 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
           announcements: {
             onDragStart: ({ active }) => {
               const { index, total } = positionOf(active.id);
-              return `${titleOf(active.id)}을 들었습니다 · ${total}개 중 ${index}번째`;
+              return `${objectOf(active.id)} 들었습니다 · ${total}개 중 ${index}번째`;
             },
             onDragOver: ({ active, over }) =>
               over
-                ? `${titleOf(active.id)}을 ${positionOf(over.id).index}번째 자리로 옮기는 중`
-                : `${titleOf(active.id)}은 놓을 수 없는 자리입니다`,
+                ? `${objectOf(active.id)} ${positionOf(over.id).index}번째 자리로 옮기는 중`
+                : `${withParticle(titleOf(active.id), "은/는")} 놓을 수 없는 자리입니다`,
             onDragEnd: ({ active, over }) =>
-              over ? `${titleOf(active.id)}을 ${positionOf(over.id).index}번째로 옮겼습니다` : `${titleOf(active.id)}을 제자리에 두었습니다`,
+              over ? `${objectOf(active.id)} ${positionOf(over.id).index}번째로 옮겼습니다` : `${objectOf(active.id)} 제자리에 두었습니다`,
             onDragCancel: ({ active }) => `${titleOf(active.id)} 이동을 취소했습니다`,
           },
         }}

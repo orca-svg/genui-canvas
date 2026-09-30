@@ -281,6 +281,8 @@ input:disabled {
 .card-chrome__secondary { display: flex; gap: 0.25rem; margin-left: auto; opacity: 0; transition: opacity 120ms; }
 .genui-canvas-card:hover .card-chrome__secondary,
 .genui-canvas-card:focus-within .card-chrome__secondary { opacity: 1; }
+/* A keyboard-focused row shows the buttons its P/H/E shortcuts stand for (their tooltips name the keys). */
+.canvas-row-item:focus-visible .card-chrome__secondary { opacity: 1; }
 .card-chrome__source { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.25rem 0.5rem; border-radius: 0.5rem; color: #245ac4; font-size: 0.8rem; font-weight: 650; text-decoration: none; }
 .card-chrome__source:hover { background: #e7efff; }
 .card-chrome svg { width: 1rem; height: 1rem; }

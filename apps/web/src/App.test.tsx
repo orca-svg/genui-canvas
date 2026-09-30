@@ -426,9 +426,12 @@ describe("App", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "혜택 찾기" }));
     // The shell's card list is in the drawer now; it shows the trusted title too.
-    await openCardList(user);
+    const cardList = await openCardList(user);
 
-    expect((await screen.findAllByText("사람이 읽는 혜택명")).length).toBeGreaterThanOrEqual(2);
+    // On the canvas: the card body once, and the trusted title naming the row (not the entity id).
+    expect(results().getAllByText("사람이 읽는 혜택명")).toHaveLength(1);
+    expect(results().getByRole("group", { name: "사람이 읽는 혜택명 카드" })).toBeInTheDocument();
+    expect(cardList.getByRole("button", { name: "사람이 읽는 혜택명(으)로 이동" })).toHaveTextContent("사람이 읽는 혜택명");
     expect(
       results().getByRole("link", { name: "사람이 읽는 혜택명 출처 페이지 열기" }),
     ).toHaveAttribute("href", "https://www.gov.kr/benefit/benefit-1");

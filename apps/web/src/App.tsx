@@ -496,6 +496,9 @@ export function App() {
   // re-compose — that is reserved for composition points, so scroll position
   // and focus are preserved.
   function manipulate(action: ShellAction) {
+    // The turn in flight will replace the shell; a manipulation now (a drag ending mid-turn,
+    // say) would be recorded and then lost. Every caller's own control is disabled too.
+    if (busy) return;
     const before = shellRef.current;
     const after = shellReducer(before, action);
     if (sameShell(before, after)) return;

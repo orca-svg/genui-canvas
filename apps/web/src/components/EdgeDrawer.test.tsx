@@ -2,8 +2,10 @@ import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@t
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import { EdgeDrawer, listedCards, type EdgeDrawerProps } from "./EdgeDrawer.js";
-import { createShellState, type ShellCard } from "../state/shell-store.js";
+import { EdgeDrawer, listedCards, rowNeighbour, type EdgeDrawerProps, type RowDirection } from "./EdgeDrawer.js";
+import { createShellState, shellReducer, type ShellCard } from "../state/shell-store.js";
+import { deriveCanvasGroups, rowsOf } from "../state/canvas-layout.js";
+import { planRowMove } from "../state/drag-reorder.js";
 
 const cards = createShellState("c", [
   { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국가장학금" },
@@ -39,6 +41,21 @@ function Harness(props: Partial<EdgeDrawerProps> = {}) {
       {...props}
     />
   );
+}
+
+/** The shell's row move, as App.moveRow applies it. */
+function moveRowIn(current: ShellCard[], card: ShellCard, direction: RowDirection): ShellCard[] {
+  const rows = rowsOf(deriveCanvasGroups(current));
+  const neighbour = rowNeighbour(rows, card, direction);
+  const own = rows.find((row) => row.benefitCardId === card.cardId);
+  const action = own && neighbour ? planRowMove(current, rows, own.key, neighbour.key) : null;
+  return action ? shellReducer({ compositionId: "c", cards: current }, action).cards : current;
+}
+
+/** A drawer whose moves really re-sort its cards, so the moved entry's DOM node moves too. */
+function MovingHarness({ start }: { start: ShellCard[] }) {
+  const [shellCards, setShellCards] = useState(start);
+  return <Harness cards={shellCards} onMoveRow={(card, direction) => setShellCards((current) => moveRowIn(current, card, direction))} />;
 }
 
 /** A finger's hover: React derives onPointerEnter/Leave from pointerover/pointerout, so dispatch those. */
@@ -265,10 +282,38 @@ describe("EdgeDrawer", () => {
     await user.click(down);
     expect(onMoveRow).toHaveBeenCalledWith(rowCards[0], "down");
   });
+
+  it("keeps focus on the moved entry's control, switching to the other direction once the row reaches the end", async () => {
+    const user = userEvent.setup();
+    const rowCards = createShellState("c", [
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "a" },
+      { cardId: "card-b", entityId: "b", componentType: "BenefitCard", title: "b" },
+      { cardId: "card-c", entityId: "c", componentType: "BenefitCard", title: "c" },
+    ]).cards;
+    render(<MovingHarness start={rowCards} />);
+    await user.click(screen.getByRole("button", { name: "카드 목록" }));
+    const dialog = screen.getByRole("dialog", { name: "카드 목록" });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    const entries = () => within(dialog).getAllByRole("button", { name: /\(으\)로 이동$/ }).map((button) => button.textContent);
+    const control = (name: string) => within(dialog).getByRole("button", { name });
+
+    // A browser drops focus to <body> when React moves the focused entry's node (and when a
+    // focused button becomes disabled); jsdom keeps it, so the first move drops it by hand.
+    act(() => control("a 아래로 이동").focus());
+    fireEvent.click(control("a 아래로 이동"));
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(entries()).toEqual(["b", "a", "c"]);
+    await waitFor(() => expect(document.activeElement).toBe(control("a 아래로 이동")));
+
+    fireEvent.click(control("a 아래로 이동"));
+    expect(entries()).toEqual(["b", "c", "a"]);
+    expect(control("a 아래로 이동")).toBeDisabled();
+    await waitFor(() => expect(document.activeElement).toBe(control("a 위로 이동")));
+  });
 });
 
 describe("listedCards", () => {
-  it("drops a candidate's own sub-cards but keeps benefit cards, bands, and orphan sub-cards in shell order", () => {
+  it("drops a candidate's own sub-cards but keeps benefit cards, bands, and orphan sub-cards in canvas order", () => {
     const shell = createShellState("c", [
       { cardId: "card-a", entityId: "a", componentType: "BenefitCard", title: "국가장학금" },
       { cardId: "score-a", entityId: "a", componentType: "ScoreBreakdown" },
@@ -276,7 +321,27 @@ describe("listedCards", () => {
       { cardId: "source-r", entityId: "r", componentType: "SourceNotice" },
       { cardId: "personas", componentType: "PersonaSelector" },
     ]).cards;
-    expect(listedCards(shell).map((card) => card.cardId)).toEqual(["card-a", "source-r", "personas"]);
+    // The PersonaSelector band leads the canvas, so it leads the list too.
+    expect(listedCards(shell).map((card) => card.cardId)).toEqual(["personas", "card-a", "source-r"]);
+  });
+
+  it("follows the canvas: persona band, candidate rows, deadline band; a hidden candidate sits where it would reappear", () => {
+    const shell = createShellState("c", [
+      { cardId: "card-a", entityId: "a", componentType: "BenefitCard" },
+      { cardId: "deadlines", componentType: "DeadlineList" },
+      { cardId: "card-b", entityId: "b", componentType: "BenefitCard", hidden: true },
+      { cardId: "score-x", entityId: "x", componentType: "ScoreBreakdown" },
+      { cardId: "personas", componentType: "PersonaSelector" },
+      { cardId: "card-c", entityId: "c", componentType: "BenefitCard" },
+    ]).cards;
+    expect(listedCards(shell).map((card) => card.cardId)).toEqual([
+      "personas",
+      "card-a",
+      "card-b",
+      "score-x",
+      "card-c",
+      "deadlines",
+    ]);
   });
 
   it("also drops sub-cards of a hidden candidate but still lists the hidden benefit card itself", () => {

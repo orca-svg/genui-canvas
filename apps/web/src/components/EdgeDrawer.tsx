@@ -28,19 +28,47 @@ export interface EdgeDrawerProps {
   onJump: (cardId: string) => void;
 }
 
+/** Card ids as the canvas shows them: groups top to bottom, each group's cells left to right. */
+function canvasOrder(cards: readonly ShellCard[]): string[] {
+  return deriveCanvasGroups(cards).flatMap((group) => group.slots.map((slot) => slot.cardId));
+}
+
 /**
- * What the drawer lists, in shell order: every card except the sub-cards
- * (ScoreBreakdown / Checklist / SourceNotice) of a candidate that has a
- * BenefitCard, hidden or not. A candidate is one row, so it is one entry;
- * bands and orphan sub-cards (no BenefitCard for their entity) stay listed.
+ * What the drawer lists: every card except the sub-cards (ScoreBreakdown /
+ * Checklist / SourceNotice) of a candidate that has a BenefitCard, hidden or
+ * not. A candidate is one row, so it is one entry; bands and orphan sub-cards
+ * (no BenefitCard for their entity) stay listed. The order is the canvas's
+ * (persona band, candidate rows, deadline band), so the list reads like the
+ * page; a hidden card, which the canvas does not show, is listed where it
+ * would reappear.
  */
 export function listedCards(cards: ShellCard[]): ShellCard[] {
   const candidates = new Set(
     cards.flatMap((card) => (card.componentType === "BenefitCard" && card.entityId ? [card.entityId] : [])),
   );
-  return cards.filter(
+  const listed = cards.filter(
     (card) => !(SUB_CARD_TYPES.has(card.componentType) && card.entityId !== undefined && candidates.has(card.entityId)),
   );
+  const listedIds = new Set(listed.map((card) => card.cardId));
+  const order = canvasOrder(cards).filter((id) => listedIds.has(id));
+  // Where each card would sit with nothing hidden; an off-canvas card goes right after the
+  // nearest card before it there that is already listed (first, if there is none).
+  const reappearing = canvasOrder(cards.map((card) => (card.hidden ? { ...card, hidden: false } : card)));
+  for (const card of listed) {
+    if (order.includes(card.cardId)) continue;
+    const at = reappearing.indexOf(card.cardId);
+    if (at === -1) {
+      order.push(card.cardId); // not placed on the canvas at all (a second card for one cell)
+      continue;
+    }
+    const previous = reappearing
+      .slice(0, at)
+      .reverse()
+      .find((id) => order.includes(id));
+    order.splice(previous === undefined ? 0 : order.indexOf(previous) + 1, 0, card.cardId);
+  }
+  const byId = new Map(listed.map((card) => [card.cardId, card]));
+  return order.map((id) => byId.get(id)!);
 }
 
 /**
@@ -70,6 +98,8 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
   // or toolbar open still moves focus into the drawer.
   const [openedByHover, setOpenedByHover] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listRef = useRef<HTMLOListElement>(null);
+  const moveFrame = useRef<number | null>(null);
 
   const clear = () => {
     if (timer.current) {
@@ -107,6 +137,7 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
   useEffect(
     () => () => {
       if (timer.current) clearTimeout(timer.current);
+      if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
     },
     [],
   );
@@ -114,6 +145,29 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
   const listed = useMemo(() => listedCards(cards), [cards]);
   const rows = useMemo(() => rowsOf(deriveCanvasGroups(cards)), [cards]);
   const titleOf = (card: ShellCard) => card.title ?? card.entityId ?? card.cardId;
+
+  // A move re-sorts the list: the browser drops focus when React moves the focused entry's
+  // node (or when the control turns disabled at the end of the list). On the next frame, once
+  // the list has re-rendered, focus goes back to the same control, or to the opposite move if
+  // the row can go no further, unless the user has already put focus somewhere else.
+  const moveRow = (card: ShellCard, direction: RowDirection) => {
+    onMoveRow(card, direction);
+    if (moveFrame.current !== null) cancelAnimationFrame(moveFrame.current);
+    moveFrame.current = requestAnimationFrame(() => {
+      moveFrame.current = null;
+      const list = listRef.current;
+      const active = document.activeElement;
+      if (!list || (active && active !== document.body && !list.contains(active))) return;
+      const entry = Array.from(list.children).find(
+        (child): child is HTMLElement => child instanceof HTMLElement && child.dataset.cardId === card.cardId,
+      );
+      const control = (towards: RowDirection) =>
+        Array.from(entry?.querySelectorAll("button") ?? []).find(
+          (button) => button.getAttribute("aria-label") === `${titleOf(card)} ${towards === "up" ? "위로" : "아래로"} 이동` && !button.disabled,
+        );
+      (control(direction) ?? control(direction === "up" ? "down" : "up"))?.focus();
+    });
+  };
 
   return (
     <>
@@ -179,9 +233,9 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
             </div>
           </header>
           {listed.length === 0 && <p className="edge-drawer__empty">검색어를 입력하거나 시나리오를 선택하면 카드가 나타납니다.</p>}
-          <ol className="edge-drawer__list">
+          <ol className="edge-drawer__list" ref={listRef}>
             {listed.map((card) => (
-              <li key={card.cardId} className="edge-drawer__row" data-hidden={card.hidden ? "true" : "false"}>
+              <li key={card.cardId} className="edge-drawer__row" data-card-id={card.cardId} data-hidden={card.hidden ? "true" : "false"}>
                 <button
                   type="button"
                   className="edge-drawer__jump"
@@ -204,8 +258,8 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
                   onExpand={() => onExpand(card)}
                   canMoveUp={rowNeighbour(rows, card, "up") !== undefined}
                   canMoveDown={rowNeighbour(rows, card, "down") !== undefined}
-                  onMoveUp={() => onMoveRow(card, "up")}
-                  onMoveDown={() => onMoveRow(card, "down")}
+                  onMoveUp={() => moveRow(card, "up")}
+                  onMoveDown={() => moveRow(card, "down")}
                 />
               </li>
             ))}

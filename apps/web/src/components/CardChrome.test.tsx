@@ -55,11 +55,19 @@ describe("CardChrome", () => {
     expect(shortcutAction("x")).toBeNull();
   });
 
-  it("matches the physical key first so shortcuts work under a Korean input source", () => {
+  it("falls back to the physical key only when the typed key is not a Latin letter (a Korean input source)", () => {
     expect(shortcutAction("ㅔ", "KeyP")).toBe("pin");
     expect(shortcutAction("ㅗ", "KeyH")).toBe("hide");
     expect(shortcutAction("ㄷ", "KeyE")).toBe("expand");
     expect(shortcutAction("x", "KeyX")).toBeNull();
     expect(shortcutAction("p", "")).toBe("pin");
+  });
+
+  it("lets the typed letter win over the physical key on other Latin layouts (Dvorak, AZERTY)", () => {
+    // Dvorak: the key at QWERTY P types "l"; the key at QWERTY R types "p".
+    expect(shortcutAction("l", "KeyP")).toBeNull();
+    expect(shortcutAction("p", "KeyR")).toBe("pin");
+    // AZERTY: the key at QWERTY Q types "a", so no shortcut fires there.
+    expect(shortcutAction("a", "KeyE")).toBeNull();
   });
 });

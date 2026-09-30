@@ -7,20 +7,15 @@ import type { ShellCard } from "../state/shell-store.js";
 export const CARD_SHORTCUTS = { pin: "p", hide: "h", expand: "e" } as const;
 
 /**
- * Maps a keydown to a card action. The physical key (`code`) wins so the
- * shortcuts keep working under a Korean input source, where `key` is a jamo
- * ("ㅔ" for P); `key` is the fallback for callers without a `code`.
+ * Maps a keydown to a card action. A typed Latin letter (`key`) decides, so
+ * the letter a Dvorak or AZERTY user presses is the letter that counts. Only
+ * when `key` is not a Latin letter — a jamo under a Korean input source ("ㅔ"
+ * for P) — does the physical key (`code`) stand in for it.
  */
 export function shortcutAction(key: string, code?: string): "pin" | "hide" | "expand" | null {
-  switch (code) {
-    case "KeyP":
-      return "pin";
-    case "KeyH":
-      return "hide";
-    case "KeyE":
-      return "expand";
-  }
-  switch (key.toLowerCase()) {
+  const typed = /^[a-z]$/i.test(key) ? key : undefined;
+  const physical = code && /^Key[A-Z]$/.test(code) ? code.slice("Key".length) : undefined;
+  switch ((typed ?? physical)?.toLowerCase()) {
     case CARD_SHORTCUTS.pin:
       return "pin";
     case CARD_SHORTCUTS.hide:
