@@ -125,9 +125,10 @@ Required manual/browser checks:
    wraps onto several lines above the canvas and the candidate rows stack into
    one column.
 2. Tab order begins with the visible-on-focus “추천 결과로 건너뛰기” link,
-   then the toolbar controls (scenarios, search, 추천 관점, history, 재구성),
-   the candidate rows with their card controls and source links, and the
-   카드 목록 handle, logically.
+   then the toolbar controls (scenarios, search, 추천 관점, history, 재구성;
+   Arrow keys move within the toolbar, and Tab lands on one toolbar item), the
+   candidate rows with their card controls and source links, and the 카드 목록
+   handle, logically.
 3. Every action has a visible focus ring. Reorder works without drag: by
    keyboard on the handle (item 15) or with 위로 이동 / 아래로 이동 in the card
    list. 더 알아보기 has `aria-controls` and `aria-expanded`.
@@ -182,8 +183,11 @@ Required manual/browser checks:
 18. Under 48rem the rows stack, the card buttons stay visible and are at least
     44 CSS pixels tall (item 5), and the card list is a bottom sheet opened from
     the toolbar's 카드 목록 button; the edge handle is not shown.
-19. With `prefers-reduced-motion: reduce`, the drawer slide and the drag
-    animations are off.
+19. With `prefers-reduced-motion: reduce`, these are off: the drawer and
+    handle slide, the row-shift transitions while dragging, the dragged
+    ghost's drop animation (the overlays pass `dropAnimation={null}`; dnd-kit
+    plays it through the Web Animations API, which CSS cannot reach), and the
+    fade of the jump flash; the card list's jump scrolls instantly.
 20. A hover-open of the card list leaves keyboard focus where it was; a
     handle or toolbar open moves focus into the list.
 

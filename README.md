@@ -54,7 +54,7 @@ immediate control over the resulting canvas.
   it on desktop, and under 48rem the toolbar's **카드 목록** button opens it as
   a bottom sheet. It lists one entry per candidate rather than one per
   sub-card, jumps to a card, restores hidden rows, and lets you 고정, 숨기기,
-  or 위로·아래로 이동 any entry, which helps when there are many candidates. A
+  or 위로·아래로 이동 any candidate, which helps when there are many. A
   hover-open leaves keyboard focus where it was, whereas the handle or the
   toolbar button moves focus into the list.
 - Keyboard: rows are focusable, and P, H, and E pin, hide, and expand the
