@@ -40,7 +40,7 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | Contracts | Strict valid/invalid fixtures for `CompositionSpec`, exact card/order set, component↔tool discriminants, opaque IDs, bounded query/profile/trace, type-specific interaction payloads, HTTPS source metadata, and the supported A2UI subset. |
 | Renderer | Escaped A2UI text renders; empty/late surfaces work; shell order and hidden filtering work; candidate groups render their cards into fixed columns with the chrome before the body and a missing column kept as an empty cell; preview/expanded wrappers and IDs remain stable; tests finish without React `act` warnings. |
 | Interactive catalog | Wire schema accepts only `Card`/`Column`/`Row`/`Divider`/`Text`, `Button` with a named canvas action, and `CheckBox` bound to a path; renderer relays Button actions and CheckBox edits to the shell and writes shell-owned values back; the shell re-validates every action before mapping it to `persona.switch`. |
-| Shell UX | Custom query and persona are composition points; pin/hide/expand/reorder are immediate and act on the candidate row (drag handle, on-card buttons, P/H/E on a focused row, or the card list); pinned-first invariant holds and pinned rows move only among pinned rows; a hide leaves a six-second 되돌리기 strip that takes focus; the card list opens 150ms after the pointer rests on the edge, closes 400ms after it leaves, stays open when locked, and leaves keyboard focus alone on a hover open; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
+| Shell UX | Custom query and persona are composition points; pin/hide/expand/reorder are immediate and act on the candidate row (drag handle, on-card buttons, P/H/E on a focused row, or the card list); pinned-first invariant holds and pinned rows move only among pinned rows; a hide from the card or with H leaves a six-second 되돌리기 strip that takes focus, and a hide from the card list does not; the card list opens 150ms after the pointer rests on the edge, closes 400ms after it leaves, stays open when locked, and leaves keyboard focus alone on a hover open; manipulation acknowledgement is serialized before recomposition; failure preserves the previous canvas. |
 | Trace/API | Server-issued UUID session, no path traversal, seq starts at zero, gap/different duplicate rejected, exact retry idempotent only while the retried event is still the session's latest row (ends when a turn's `tool.called` row lands), sequence conflicts return the server's `nextSeq` for one client re-sync retry, unknown sessions rejected, request objects strict, error details hidden, CORS allowlisted. |
 | Trace bookkeeping | `session.start` at seq 0, one `tool.called` per turn, `nextSeq` on terminal events, client events continue the server sequence, bookkeeping rows excluded from the provider's recent history. |
 | Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
@@ -126,9 +126,9 @@ Required manual/browser checks:
    one column.
 2. Tab order begins with the visible-on-focus “추천 결과로 건너뛰기” link,
    then the toolbar controls (scenarios, search, 추천 관점, history, 재구성;
-   Arrow keys move within the toolbar, and Tab lands on one toolbar item), the
-   candidate rows with their card controls and source links, and the 카드 목록
-   handle, logically.
+   Tab lands on one roving toolbar item, then the 추천 관점 select, and Arrow
+   keys move among the toolbar items), the candidate rows with their card
+   controls and source links, and the 카드 목록 handle, logically.
 3. Every action has a visible focus ring. Reorder works without drag: by
    keyboard on the handle (item 15) or with 위로 이동 / 아래로 이동 in the card
    list. 더 알아보기 has `aria-controls` and `aria-expanded`.
@@ -165,9 +165,11 @@ Required manual/browser checks:
 13. At 1920 CSS pixels the canvas spans the viewport width inside the page
     padding; each candidate is one row with its `BenefitCard`,
     `ScoreBreakdown`, `Checklist`, and `SourceNotice` in aligned columns; an
-    empty slot draws nothing unless it carries a hint ("고정하면 점수 분석이 여기
-    옵니다" on an unpinned row, "재구성하면 체크리스트·출처가 여기 옵니다" on an
-    expanded one).
+    empty slot draws nothing unless it carries a hint ("고정한 뒤 재구성하면
+    점수 분석이 여기 옵니다" on an unpinned candidate, "재구성하면 점수 분석이
+    여기 옵니다" once it is pinned, and "재구성하면 체크리스트가 여기 옵니다" and
+    "재구성하면 출처 안내가 여기 옵니다" on an expanded one; a row without a
+    `BenefitCard` shows none).
 14. Dragging a row by its handle shows a ghost and a placeholder; dropping it
     records one `card.reorder`; a pinned row cannot be dropped among unpinned
     rows (the placeholder stops and the hint "고정된 카드는 고정 그룹 안에서만
@@ -190,6 +192,13 @@ Required manual/browser checks:
     fade of the jump flash; the card list's jump scrolls instantly.
 20. A hover-open of the card list leaves keyboard focus where it was; a
     handle or toolbar open moves focus into the list.
+21. Sub-card bodies are never clipped: at 1440 and 1024 CSS pixels, a
+    candidate that was expanded and pinned and then recomposed shows its
+    `ScoreBreakdown`, `Checklist`, and `SourceNotice` in full (only a
+    collapsed `BenefitCard` or band is capped at an 18rem preview).
+22. The 카드 목록 handle does not cover a canvas column: above 48rem it is a
+    vertical tab no wider than 2rem inside the page's right padding, which is
+    at least 2.5rem there.
 
 Retain screenshots and console/overflow measurements with the release record;
 do not infer this gate from unit tests alone.

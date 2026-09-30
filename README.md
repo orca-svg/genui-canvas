@@ -36,31 +36,40 @@ immediate control over the resulting canvas.
   reorders candidate rows, and pinned rows move only among pinned rows.
   **더 알아보기** marks a candidate expanded; its `Checklist` and
   `SourceNotice` arrive with the next **조작 반영해 재구성**, and the empty
-  slots in its row say so. **고정** and **숨기기** sit on the card too. A hidden
-  row leaves an inline **되돌리기** strip for six seconds, and focus moves to it
-  so the undo is reachable by keyboard.
+  slots in its row say so. **고정** and **숨기기** sit on the card too; a pin
+  likewise brings the `ScoreBreakdown` with the next recomposition, and the
+  empty score slot says so before and after the pin. Hiding a row on the card
+  or with H leaves an inline **되돌리기** strip for six seconds, and focus
+  moves to it so the undo is reachable by keyboard; a hide from the card list
+  leaves no strip.
 - The canvas uses the full width as one row per candidate: `BenefitCard` first,
   then `ScoreBreakdown`, `Checklist`, and `SourceNotice` in fixed columns so
   candidates line up (two columns between 48rem and 64rem, stacked under
   48rem). `PersonaSelector` is a band on top and `DeadlineList` a band at the
   bottom. An empty slot draws nothing unless it carries a hint, such as
-  "고정하면 점수 분석이 여기 옵니다".
+  "고정한 뒤 재구성하면 점수 분석이 여기 옵니다". When every card is hidden,
+  the canvas says so and points to the card list.
 - The top toolbar holds the scenarios, search, **추천 관점**, **실행 취소**,
   **다시 실행**, and **조작 반영해 재구성** with the count of pending
-  manipulations (also announced as "대기 조작 N개").
+  manipulations (exposed as the button's accessible description,
+  "대기 조작 N개").
 - The card list is a drawer. Rest the pointer on the right screen edge for
   150ms and it opens (it closes 400ms after the pointer leaves, **열어 두기**
   keeps it open, Esc closes it); the always-visible **카드 목록** handle opens
   it on desktop, and under 48rem the toolbar's **카드 목록** button opens it as
   a bottom sheet. It lists one entry per candidate rather than one per
-  sub-card, jumps to a card, restores hidden rows, and lets you 고정, 숨기기,
+  sub-card, in canvas order (a hidden row sits where it would reappear),
+  jumps to a card, restores hidden rows, and lets you 고정, 숨기기,
   or 위로·아래로 이동 any candidate, which helps when there are many. A
   hover-open leaves keyboard focus where it was, whereas the handle or the
   toolbar button moves focus into the list.
 - Keyboard: rows are focusable, and P, H, and E pin, hide, and expand the
-  focused row (physical keys, so they work under a Korean input source). On
-  the handle, Space picks a row up, the arrow keys move it, Enter drops it, and
-  Esc cancels, with Korean announcements for screen readers.
+  focused row. The typed letter counts, so a Dvorak or AZERTY user presses the
+  letter itself; under a Korean input source, where the key types a jamo, the
+  physical key stands in. A keyboard-focused row reveals its 고정 and 숨기기
+  buttons and declares the keys with `aria-keyshortcuts`. On the handle, Space
+  picks a row up, the arrow keys move it, Enter drops it, and Esc cancels,
+  with Korean announcements for screen readers.
 - Every accepted action is a bounded, structured event, whether it starts on
   the card, in the card list, or at the keyboard. The next composition reads a
   server-derived trace; the client cannot replace that summary.
