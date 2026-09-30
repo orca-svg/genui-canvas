@@ -72,10 +72,43 @@ describe("CanvasRows", () => {
     const user = userEvent.setup();
     render(<Harness />);
     const rowB = await screen.findByRole("group", { name: "월세 지원 카드" });
-    expect(within(rowB).queryByText(/재구성하면/)).toBeNull();
+    expect(within(rowB).queryByText("재구성하면 체크리스트가 여기 옵니다")).toBeNull();
+    expect(within(rowB).queryByText("재구성하면 출처 안내가 여기 옵니다")).toBeNull();
     await user.click(within(rowB).getByRole("button", { name: "월세 지원 더 알아보기" }));
-    expect(within(rowB).getAllByText("재구성하면 체크리스트·출처가 여기 옵니다")).toHaveLength(2);
+    expect(within(rowB).getByText("고정한 뒤 재구성하면 점수 분석이 여기 옵니다")).toBeInTheDocument();
+    expect(within(rowB).getByText("재구성하면 체크리스트가 여기 옵니다")).toBeInTheDocument();
+    expect(within(rowB).getByText("재구성하면 출처 안내가 여기 옵니다")).toBeInTheDocument();
     expect(within(rowB).getByRole("button", { name: "월세 지원 접기" })).toBeInTheDocument();
+  });
+
+  it("keeps the score hint after pinning and says the recomposition brings it", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const rowB = await screen.findByRole("group", { name: "월세 지원 카드" });
+    expect(within(rowB).getByText("고정한 뒤 재구성하면 점수 분석이 여기 옵니다")).toBeInTheDocument();
+    await user.click(within(rowB).getByRole("button", { name: "월세 지원 고정" }));
+    // pinning moves the row to the front, so look it up again
+    const pinned = screen.getByRole("group", { name: "월세 지원 카드" });
+    expect(within(pinned).getByText("재구성하면 점수 분석이 여기 옵니다")).toBeInTheDocument();
+    expect(within(pinned).queryByText("고정한 뒤 재구성하면 점수 분석이 여기 옵니다")).toBeNull();
+  });
+
+  it("gives an orphan row (no BenefitCard to pin or expand) no hints", async () => {
+    const start = createShellState("c", [{ cardId: "checklist-x", entityId: "x", componentType: "Checklist" }]);
+    await mount(<Harness start={start} />);
+    const orphan = screen.getByRole("group", { name: "x 카드" });
+    expect(orphan.querySelector(".genui-canvas-slot__hint")).toBeNull();
+  });
+
+  it("never marks a sub-card as a benefit or band cell, so the collapsed-preview clip cannot reach it", async () => {
+    // styles.css clips a collapsed body only for [data-column="benefit"] and [data-column="band"];
+    // jsdom computes no styles, so this pins the DOM contract the rule selects on.
+    await mount(<Harness />);
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    const score = within(rowA).getByTestId("card-score-a");
+    expect(score).toHaveAttribute("data-column", "score");
+    expect(score).toHaveAttribute("data-expanded", "false");
+    expect(within(rowA).getByTestId("card-card-a")).toHaveAttribute("data-column", "benefit");
   });
 
   it("handles P/H/E on a focused row and ignores modifier combinations", async () => {

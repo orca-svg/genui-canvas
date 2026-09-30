@@ -56,10 +56,24 @@ interface Notice {
   afterKey: string | null;
 }
 
+/**
+ * What an empty cell of `row` says about the two-step model: a pin or an
+ * expand marks the row, and the sub-card arrives with the next recomposition.
+ * The score hint stays after the pin (only its wording changes) so the second
+ * step is still explained; an orphan row has nothing to pin or expand.
+ */
 function emptySlotHint(column: string, row: CanvasRow): string | null {
-  if (column === "score" && !row.pinned) return "고정하면 점수 분석이 여기 옵니다";
-  if ((column === "checklist" || column === "source") && row.expanded) return "재구성하면 체크리스트·출처가 여기 옵니다";
-  return null;
+  switch (column) {
+    case "score":
+      if (!row.benefitCardId) return null;
+      return row.pinned ? "재구성하면 점수 분석이 여기 옵니다" : "고정한 뒤 재구성하면 점수 분석이 여기 옵니다";
+    case "checklist":
+      return row.expanded ? "재구성하면 체크리스트가 여기 옵니다" : null;
+    case "source":
+      return row.expanded ? "재구성하면 출처 안내가 여기 옵니다" : null;
+    default:
+      return null;
+  }
 }
 
 /**
