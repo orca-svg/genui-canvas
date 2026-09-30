@@ -140,7 +140,7 @@ export function CardFrame({
           {card.hidden ? <Eye /> : <EyeOff />}
         </AttachmentAction>
         <AttachmentAction
-          aria-label={`${title} ${card.expanded ? "접기" : "펼치기"}`}
+          aria-label={`${title} ${card.expanded ? "접기" : "더 알아보기"}`}
           aria-controls={card.hidden ? undefined : `canvas-card-${card.cardId}`}
           aria-expanded={card.expanded}
           disabled={busy || card.hidden}

@@ -161,9 +161,20 @@ describe("CanvasRows", () => {
       expect(group).not.toHaveAttribute("aria-disabled");
     }
     const handle = within(rowA).getByRole("button", { name: "국가장학금 순서 바꾸기" });
-    expect(handle).toHaveAttribute("aria-roledescription", "sortable");
+    expect(handle).toHaveAttribute("aria-roledescription", "정렬 가능한 카드");
     expect(handle).toHaveAttribute("aria-describedby");
     expect(handle).toHaveAccessibleDescription(/Space/);
+  });
+
+  it("keeps dnd-kit's pressed state off the row group while it is carried", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const rowA = await screen.findByRole("group", { name: "국가장학금 카드" });
+    within(rowA).getByRole("button", { name: "국가장학금 순서 바꾸기" }).focus();
+    await user.keyboard(" ");
+    expect(await screen.findByText(/국가장학금을 들었습니다/)).toBeInTheDocument();
+    expect(rowA).not.toHaveAttribute("aria-pressed");
+    await user.keyboard("{Escape}");
   });
 
   it("moves focus to 되돌리기 after H, then to the restored row after undo", async () => {

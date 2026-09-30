@@ -7,6 +7,11 @@ import { cleanup } from "@testing-library/react";
 // awaits a fake `setTimeout(0)` that never fires under `vi.useFakeTimers()`.
 Object.assign(globalThis, { jest: { advanceTimersByTime: (ms: number) => vi.advanceTimersByTime(ms) } });
 
+// jsdom has no scrollIntoView; the card list's jump scrolls the canvas to a card.
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = function () {};
+}
+
 afterEach(() => {
   cleanup();
 });

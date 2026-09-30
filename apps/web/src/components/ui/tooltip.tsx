@@ -16,7 +16,8 @@ export function Tooltip({ label, children, className }: { label: string; childre
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger render={children} />
       <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Positioner sideOffset={6}>
+        {/* Above the card list drawer (z-index 50) and its handle (51). */}
+        <TooltipPrimitive.Positioner sideOffset={6} className="z-[60]">
           <TooltipPrimitive.Popup className={cn("rounded-md bg-foreground px-2 py-1 text-xs text-background shadow", className)}>
             {label}
           </TooltipPrimitive.Popup>

@@ -24,13 +24,14 @@ const DRAG_INSTRUCTIONS = "순서를 바꾸려면 Space를 누른 뒤 위·아�
 /**
  * SortableItem spreads dnd-kit's draggable attributes onto its wrapper, but
  * the drag listeners live on the handle. The wrapper must not announce
- * "sortable" or carry the drag instructions, so every group overrides these
- * (the handle carries them instead).
+ * "sortable", report dnd-kit's pressed state while carried, or carry the drag
+ * instructions, so every group overrides these (the handle carries them instead).
  */
 const NO_DND_ATTRIBUTES = {
   "aria-roledescription": undefined,
   "aria-describedby": undefined,
   "aria-disabled": undefined,
+  "aria-pressed": undefined,
 } as const;
 
 export interface CanvasRowsProps {
@@ -212,7 +213,7 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
               <button
                 type="button"
                 aria-label={`${row.title} 순서 바꾸기`}
-                aria-roledescription="sortable"
+                aria-roledescription="정렬 가능한 카드"
                 aria-describedby={instructionsId}
                 disabled={busy}
               />
