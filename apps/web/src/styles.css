@@ -501,13 +501,15 @@ input:disabled {
 /* Edge drawer: the card list, revealed at the right screen edge (bottom sheet on narrow screens). */
 .edge-zone { position: fixed; top: 0; right: 0; width: 12px; height: 100vh; z-index: 40; }
 .edge-handle {
-  position: fixed; top: 50%; right: 0; z-index: 41; transform: translateY(-50%);
+  position: fixed; top: 50%; right: 0; z-index: 41; transform: translateY(-50%); transition: right 180ms ease;
   display: inline-flex; align-items: center; gap: 0.375rem;
   border: 1px solid #b9c5d8; border-right: 0; border-radius: 0.625rem 0 0 0.625rem;
   background: #fff; color: #1e3157; padding: 0.625rem 0.5rem; font-size: 0.8125rem; font-weight: 700;
   box-shadow: 0 0.25rem 1rem rgb(29 50 86 / 12%); cursor: pointer;
 }
 .edge-handle svg { width: 1rem; height: 1rem; }
+/* Open side drawer: the handle rides on the drawer's left edge, above it, so it stays reachable. */
+.edge-handle[data-open="true"] { z-index: 51; right: min(20rem, 100vw); }
 .drawer-viewport { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
 .edge-drawer {
   position: fixed; top: 0; right: 0; height: 100vh; width: min(20rem, 100vw); pointer-events: auto;
@@ -529,6 +531,7 @@ input:disabled {
 .edge-drawer__list [data-slot="attachment"] { width: 100%; max-width: 100%; }
 @media (max-width: 48rem) {
   .edge-handle { top: auto; bottom: 1rem; right: 1rem; transform: none; border-right: 1px solid #b9c5d8; border-radius: 999px; min-height: 2.75rem; }
+  .edge-handle[data-open="true"] { z-index: 41; right: 1rem; } /* the sheet covers it; the sheet has its own close */
   .edge-drawer__list [data-slot="attachment-action"], .edge-drawer__list .card-source-link { min-width: 2.75rem; min-height: 2.75rem; }
 }
-@media (prefers-reduced-motion: reduce) { .edge-drawer { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .edge-drawer, .edge-handle { transition: none; } }

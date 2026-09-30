@@ -84,7 +84,22 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
     clear();
     timer.current = setTimeout(() => onOpenChange(false), CLOSE_DELAY_MS);
   };
-  useEffect(() => clear, []);
+  // Leaving the zone always drops a pending open (the pointer did not rest), but only an open drawer has anything to close.
+  const leaveZone = (event: PointerEvent) => {
+    clear();
+    if (!open) return;
+    scheduleClose(event);
+  };
+  // The lock belongs to one opening: whatever closes the drawer (Esc, the handle, a parent) releases it.
+  useEffect(() => {
+    if (!open) setLocked(false);
+  }, [open]);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
 
   const listed = useMemo(() => listedCards(cards), [cards]);
   const rows = useMemo(() => rowsOf(deriveCanvasGroups(cards)), [cards]);
@@ -93,7 +108,7 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
   return (
     <>
       {!mobile && (
-        <div className="edge-zone" data-testid="edge-zone" aria-hidden="true" onPointerEnter={scheduleOpen} onPointerLeave={scheduleClose} />
+        <div className="edge-zone" data-testid="edge-zone" aria-hidden="true" onPointerEnter={scheduleOpen} onPointerLeave={leaveZone} />
       )}
       <button
         type="button"
@@ -101,6 +116,7 @@ export function EdgeDrawer({ cards, busy, open, onOpenChange, onPin, onHide, onE
         aria-label="카드 목록"
         aria-expanded={open}
         aria-controls="edge-drawer"
+        data-open={open}
         onClick={() => {
           clear();
           onOpenChange(!open);

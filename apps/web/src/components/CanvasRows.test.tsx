@@ -94,9 +94,10 @@ describe("CanvasRows", () => {
   });
 
   it("hides a row, leaves an undo strip in its place for six seconds, and restores on 되돌리기", async () => {
-    // Mount on real timers, then fake them: fireEvent + a plain fake clock keep
-    // the six-second boundary exact (RTL's async helpers hang under vitest fake
-    // timers, and shouldAdvanceTime would let real time leak in).
+    // Mount on real timers, then fake them: plain fake timers with fireEvent
+    // keep the 5999/6000ms boundary exact (userEvent would work too, since
+    // test-setup.ts bridges RTL's fake-timer drain, but shouldAdvanceTime would
+    // let real time leak in).
     await mount(<Harness />);
     vi.useFakeTimers();
     const rowA = screen.getByRole("group", { name: "국가장학금 카드" });

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -39,6 +39,13 @@ function Harness(props: Partial<EdgeDrawerProps> = {}) {
       {...props}
     />
   );
+}
+
+/** A finger's hover: React derives onPointerEnter/Leave from pointerover/pointerout, so dispatch those. */
+function touch(type: "pointerOver" | "pointerOut", target: Element) {
+  const event = createEvent[type](target);
+  Object.defineProperty(event, "pointerType", { value: "touch" });
+  fireEvent(target, event);
 }
 
 beforeEach(() => mockMatchMedia(false));
@@ -86,6 +93,100 @@ describe("EdgeDrawer", () => {
     expect(onJump).toHaveBeenCalledWith("card-a");
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull();
+  });
+
+  it("stays open when the pointer moves from the edge zone onto the popup within 400ms", () => {
+    vi.useFakeTimers();
+    render(<Harness />);
+    const zone = screen.getByTestId("edge-zone");
+    fireEvent.pointerEnter(zone);
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    const dialog = screen.getByRole("dialog", { name: "카드 목록" });
+    fireEvent.pointerLeave(zone);
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    fireEvent.pointerEnter(dialog);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByRole("dialog", { name: "카드 목록" })).toBeInTheDocument();
+  });
+
+  it("closes 400ms after the pointer leaves the popup when it is not locked", () => {
+    vi.useFakeTimers();
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "카드 목록" }));
+    const dialog = screen.getByRole("dialog", { name: "카드 목록" });
+    fireEvent.pointerLeave(dialog);
+    act(() => {
+      vi.advanceTimersByTime(399);
+    });
+    expect(screen.getByRole("dialog", { name: "카드 목록" })).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull();
+  });
+
+  it("closes an open drawer with the handle", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const handle = screen.getByRole("button", { name: "카드 목록" });
+    await user.click(handle);
+    expect(screen.getByRole("dialog", { name: "카드 목록" })).toBeInTheDocument();
+    await user.click(handle);
+    expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull();
+    expect(handle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("ignores touch pointers for hover: no open on touch-enter, no close on touch-leave", () => {
+    vi.useFakeTimers();
+    render(<Harness />);
+    touch("pointerOver", screen.getByTestId("edge-zone"));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "카드 목록" }));
+    touch("pointerOut", screen.getByRole("dialog", { name: "카드 목록" }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByRole("dialog", { name: "카드 목록" })).toBeInTheDocument();
+  });
+
+  it("neither opens nor fires a stray close when the pointer leaves the zone before resting", () => {
+    vi.useFakeTimers();
+    const onOpenChange = vi.fn();
+    render(<Harness open={false} onOpenChange={onOpenChange} />);
+    const zone = screen.getByTestId("edge-zone");
+    fireEvent.pointerEnter(zone);
+    act(() => {
+      vi.advanceTimersByTime(149);
+    });
+    fireEvent.pointerLeave(zone);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("clears the lock when the drawer is closed by the handle, so a reopen starts unlocked", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const handle = screen.getByRole("button", { name: "카드 목록" });
+    await user.click(handle);
+    const lock = within(screen.getByRole("dialog", { name: "카드 목록" })).getByRole("button", { name: "열어 두기" });
+    await user.click(lock);
+    expect(lock).toHaveAttribute("aria-pressed", "true");
+    await user.click(handle);
+    expect(screen.queryByRole("dialog", { name: "카드 목록" })).toBeNull();
+    await user.click(handle);
+    const reopened = within(screen.getByRole("dialog", { name: "카드 목록" })).getByRole("button", { name: "열어 두기" });
+    expect(reopened).toHaveAttribute("aria-pressed", "false");
   });
 
   it("cancels a pending open when it unmounts", () => {
