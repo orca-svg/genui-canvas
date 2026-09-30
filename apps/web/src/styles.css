@@ -468,3 +468,20 @@ input:disabled {
     min-height: 2.75rem;
   }
 }
+
+/* Card chrome: the shell's controls on a BenefitCard. The secondary group is
+   revealed with opacity only, so it never leaves the tab order. */
+.card-chrome { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.625rem; }
+.card-chrome__badge { border-radius: 999px; background: #e7efff; color: #1f4fb8; padding: 0.125rem 0.5rem; font-size: 0.75rem; font-weight: 700; }
+.card-chrome__secondary { display: flex; gap: 0.25rem; margin-left: auto; opacity: 0; transition: opacity 120ms; }
+.genui-canvas-card:hover .card-chrome__secondary,
+.genui-canvas-card:focus-within .card-chrome__secondary { opacity: 1; }
+.card-chrome__source { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.25rem 0.5rem; border-radius: 0.5rem; color: #245ac4; font-size: 0.8rem; font-weight: 650; text-decoration: none; }
+.card-chrome__source:hover { background: #e7efff; }
+.card-chrome svg { width: 1rem; height: 1rem; }
+.genui-canvas-card[data-column="benefit"]:has(.card-chrome__badge) { border-left: 4px solid #1f4fb8; }
+@media (max-width: 48rem) {
+  .card-chrome__secondary { opacity: 1; }
+  .card-chrome button, .card-chrome__source { min-height: 2.75rem; }
+}
+@media (hover: none) { .card-chrome__secondary { opacity: 1; } }
