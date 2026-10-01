@@ -34,10 +34,44 @@ export interface TurnBody {
   query?: string;
 }
 
+/** What the server is connected to; the shell's notice line describes it. */
+export interface GatewayInfo {
+  /** Composer of a normal turn, e.g. "rule-based" or "gemini". */
+  provider: string;
+  /** Composer that takes over when `provider` fails, when one is configured. */
+  fallbackProvider?: string;
+  /** The gateway's data mode, e.g. "fixture". */
+  dataMode: string;
+  version?: string;
+}
+
+/** Accepts the server's `gateway` object; anything malformed reads as "not reported". */
+function parseGatewayInfo(value: unknown): GatewayInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const text = (key: string): string | undefined => {
+    const field = record[key];
+    return typeof field === "string" && field.length > 0 && field.length <= 100 ? field : undefined;
+  };
+  const provider = text("provider");
+  const dataMode = text("dataMode");
+  if (!provider || !dataMode) return undefined;
+  const fallbackProvider = text("fallbackProvider");
+  const version = text("version");
+  return {
+    provider,
+    dataMode,
+    ...(fallbackProvider ? { fallbackProvider } : {}),
+    ...(version ? { version } : {}),
+  };
+}
+
 export interface SessionHandle {
   sessionId: string;
   /** Sequence the client must use for its first trace event (server records session.start first). */
   nextSeq: number;
+  /** Absent when the server predates provider reporting. */
+  gateway?: GatewayInfo;
 }
 
 export async function createSession(): Promise<SessionHandle> {
@@ -46,12 +80,17 @@ export async function createSession(): Promise<SessionHandle> {
     signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
   });
   assertOk(res, "create session");
-  const body = (await res.json()) as { sessionId?: unknown; nextSeq?: unknown };
+  const body = (await res.json()) as { sessionId?: unknown; nextSeq?: unknown; gateway?: unknown };
   const nextSeq =
     typeof body.nextSeq === "number" && Number.isInteger(body.nextSeq) && body.nextSeq >= 0
       ? body.nextSeq
       : 0;
-  return { sessionId: SessionIdSchema.parse(body.sessionId), nextSeq };
+  const gateway = parseGatewayInfo(body.gateway);
+  return {
+    sessionId: SessionIdSchema.parse(body.sessionId),
+    nextSeq,
+    ...(gateway ? { gateway } : {}),
+  };
 }
 
 /**

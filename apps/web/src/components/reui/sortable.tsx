@@ -279,6 +279,14 @@ function Sortable<T>({
     return result
   }, [activeId, children])
 
+  // A SortableOverlay child replaces the built-in overlay. Two DragOverlays
+  // would both run dnd-kit's drop animation on the dropped item: the second
+  // one captures the first one's "opacity: 0.4" side effect as the original
+  // value and restores it, so the item stays dimmed after every drop.
+  const hasOverlayChild = Children.toArray(children).some(
+    (child) => isValidElement(child) && child.type === SortableOverlay
+  )
+
   return (
     <SortableInternalContext.Provider value={contextValue}>
       <DndContext
@@ -301,6 +309,7 @@ function Sortable<T>({
           })}
         </SortableContext>
         {mounted &&
+          !hasOverlayChild &&
           createPortal(
             <DragOverlay
               dropAnimation={reducedMotion ? null : dropAnimationConfig}

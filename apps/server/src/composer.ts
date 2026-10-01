@@ -21,7 +21,21 @@ import { expandComposition, type A2uiMessage, type ExpandContext } from "./compo
 export interface ComposerDeps {
   gateway: GatewayClient;
   provider: LlmProvider;
+  /** Composes the turn when `provider` throws, times out, or returns an invalid spec. */
+  fallbackProvider?: LlmProvider;
+  /** Upper bound for one `provider.compose` call; past it the fallback takes over. */
+  providerTimeoutMs?: number;
+  /** Receives one line per fallback (default: console.error). */
+  log?: (message: string) => void;
 }
+
+/** Why `fallbackProvider` composed a turn instead of `provider`. */
+export interface TurnFallback {
+  from: string;
+  reason: string;
+}
+
+const DEFAULT_PROVIDER_TIMEOUT_MS = 12_000;
 
 export interface CurrentCompositionState {
   cards: Array<{
@@ -52,6 +66,8 @@ export type TurnResult =
       /** Cards after the visible order that the shell keeps as hidden rows. */
       hiddenCardIds: string[];
       toolCalls: ToolCallSummary[];
+      /** Set when `fallbackProvider` composed this turn instead of `provider`. */
+      fallback?: TurnFallback;
     }
   | { ok: false; errors: string[]; toolCalls: ToolCallSummary[] };
 
@@ -176,9 +192,9 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
     profile: request.profile as UserProfile,
   };
 
-  const raw = await deps.provider.compose({ context, candidates, resources });
-  const validation = validateComposition(raw, cache);
-  if (!validation.ok) return { ok: false, errors: validation.errors, toolCalls: ledger.summary() };
+  const composed = await composeWithFallback(deps, { context, candidates, resources }, cache);
+  if (!composed.ok) return { ok: false, errors: composed.errors, toolCalls: ledger.summary() };
+  const { validation, fallback } = composed;
 
   const enforced = enforceManipulationInvariants(
     validation.spec,
@@ -210,7 +226,75 @@ export async function composeTurn(deps: ComposerDeps, request: TurnRequest): Pro
     ),
     hiddenCardIds: enforced.hiddenCardIds,
     toolCalls: ledger.summary(),
+    ...(fallback ? { fallback } : {}),
   };
+}
+
+type ValidatedSpec = Extract<ReturnType<typeof validateComposition>, { ok: true }>;
+type ComposedSpec =
+  | { ok: true; validation: ValidatedSpec; fallback?: TurnFallback }
+  | { ok: false; errors: string[] };
+
+/**
+ * Runs the primary provider under a timeout and validates its spec. When a
+ * fallback provider is configured, any failure of the primary (throw, timeout,
+ * invalid spec) is logged and the fallback composes the turn instead, so an
+ * operator's LLM key never turns a demo into "구성 중 오류가 발생했습니다".
+ * Without a fallback the primary's behaviour is unchanged: a throw propagates
+ * and an invalid spec is reported as errors.
+ */
+async function composeWithFallback(
+  deps: ComposerDeps,
+  request: Parameters<LlmProvider["compose"]>[0],
+  cache: ToolResultCache,
+): Promise<ComposedSpec> {
+  const primary = await attemptPrimary(deps, request, cache);
+  if (primary.ok) return { ok: true, validation: primary.validation };
+  const fallbackTo = deps.fallbackProvider;
+  if (!fallbackTo) {
+    if (primary.kind === "threw") throw primary.error;
+    return { ok: false, errors: primary.errors };
+  }
+  const log = deps.log ?? ((message: string) => console.error(message));
+  log(
+    `[genui-canvas] ${deps.provider.name} provider failed (${primary.reason}); composing with ${fallbackTo.name} instead`,
+  );
+  const validation = validateComposition(await fallbackTo.compose(request), cache);
+  if (!validation.ok) return { ok: false, errors: validation.errors };
+  return { ok: true, validation, fallback: { from: deps.provider.name, reason: primary.reason } };
+}
+
+type PrimaryOutcome =
+  | { ok: true; validation: ValidatedSpec }
+  | { ok: false; kind: "threw"; reason: string; errors: string[]; error: unknown }
+  | { ok: false; kind: "invalid"; reason: string; errors: string[] };
+
+async function attemptPrimary(
+  deps: ComposerDeps,
+  request: Parameters<LlmProvider["compose"]>[0],
+  cache: ToolResultCache,
+): Promise<PrimaryOutcome> {
+  let raw: unknown;
+  try {
+    raw = await withTimeout(
+      deps.provider.compose(request),
+      deps.providerTimeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS,
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, kind: "threw", reason, errors: [reason], error };
+  }
+  const validation = validateComposition(raw, cache);
+  if (validation.ok) return { ok: true, validation };
+  return { ok: false, kind: "invalid", reason: validation.errors.join(" · "), errors: validation.errors };
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`provider timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function buildCardMetadata(

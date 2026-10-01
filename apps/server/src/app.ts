@@ -19,7 +19,7 @@ import {
   type ServerEvent,
 } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
-import { GatewayCompatibilityError } from "./mcp/gateway-client.js";
+import { GATEWAY_REPOSITORY_MODE, GatewayCompatibilityError } from "./mcp/gateway-client.js";
 import { summarizeTrace } from "./trace/summarize.js";
 import type { TraceStore } from "./trace/store.js";
 
@@ -109,7 +109,21 @@ export function createApp(deps: AppDeps) {
         context: { compositionId: "session", visibleCardIds: [] },
       }),
     );
-    return c.json({ sessionId, nextSeq: session.seq });
+    // Read per session: the gateway reports its version in the MCP handshake,
+    // which happens after createApp() in index.ts and in the tests' beforeAll.
+    const version = deps.gateway.serverVersion;
+    return c.json({
+      sessionId,
+      nextSeq: session.seq,
+      // What the shell is talking to, so its notice line describes the real setup
+      // instead of assuming fixture data and a rule-based composer.
+      gateway: {
+        provider: deps.provider.name,
+        ...(deps.fallbackProvider ? { fallbackProvider: deps.fallbackProvider.name } : {}),
+        dataMode: GATEWAY_REPOSITORY_MODE,
+        ...(version ? { version } : {}),
+      },
+    });
   });
 
   app.post("/api/events", async (c) => {
@@ -222,6 +236,10 @@ export function createApp(deps: AppDeps) {
               ...metadataByCardId.get(card.cardId),
             })),
             nextSeq: session.seq,
+            composedBy:
+              result.fallback && deps.fallbackProvider
+                ? { provider: deps.fallbackProvider.name, fallbackFrom: result.fallback.from }
+                : { provider: deps.provider.name },
           };
           await stream.writeSSE({ event: "composition", data: serverEventData(compositionEvent) });
         } else {
@@ -231,6 +249,9 @@ export function createApp(deps: AppDeps) {
           });
         }
       } catch (error) {
+        // The frame below is deliberately generic; the operator's log keeps the cause.
+        // eslint-disable-next-line no-console
+        console.error("[genui-canvas] turn failed:", error);
         await stream.writeSSE({
           event: "error",
           data: serverEventData({

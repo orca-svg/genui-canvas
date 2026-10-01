@@ -163,6 +163,11 @@ export const ServerEventSchema = z.discriminatedUnion("kind", [
       messages: z.array(A2uiMessageSchema).max(200),
       cards: z.array(CompositionCardSchema).max(50).default([]),
       nextSeq: NextSeqSchema,
+      /** Which provider composed this turn; `fallbackFrom` names the one that failed first. */
+      composedBy: z
+        .object({ provider: z.string().max(100), fallbackFrom: z.string().max(100).optional() })
+        .strict()
+        .optional(),
     })
     .strict(),
   z.object({ kind: z.literal("error"), message: z.string().max(500), nextSeq: NextSeqSchema }).strict(),

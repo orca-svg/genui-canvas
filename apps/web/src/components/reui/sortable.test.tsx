@@ -50,15 +50,34 @@ describe("Sortable drag overlays", () => {
   it("plays no drop animation in either overlay when the user prefers reduced motion", () => {
     mockMatchMedia(true);
     mountSortable();
-    // One overlay lives inside Sortable, the other is the SortableOverlay.
-    expect(overlayProps.length).toBeGreaterThanOrEqual(2);
+    expect(overlayProps.length).toBe(1);
     for (const props of overlayProps) expect(props.dropAnimation).toBeNull();
   });
 
   it("keeps dnd-kit's drop animation otherwise", () => {
     mockMatchMedia(false);
     mountSortable();
-    expect(overlayProps.length).toBeGreaterThanOrEqual(2);
+    expect(overlayProps.length).toBe(1);
     for (const props of overlayProps) expect(props.dropAnimation).toEqual(expect.objectContaining({ sideEffects: expect.any(Function) }));
+  });
+
+  // Two DragOverlays would each run dnd-kit's drop animation on the same row:
+  // the second one captures the first one's "opacity: 0.4" side effect as the
+  // original value and restores it, leaving the dropped row dimmed for good.
+  it("renders exactly one DragOverlay when a SortableOverlay child is present", () => {
+    mockMatchMedia(false);
+    mountSortable();
+    expect(overlayProps.length).toBe(1);
+  });
+
+  it("falls back to its own DragOverlay when no SortableOverlay child is present", () => {
+    mockMatchMedia(false);
+    render(
+      <Sortable value={["a", "b"]} onValueChange={() => {}} getItemValue={(key) => key}>
+        <SortableItem value="a">A</SortableItem>
+        <SortableItem value="b">B</SortableItem>
+      </Sortable>,
+    );
+    expect(overlayProps.length).toBe(1);
   });
 });

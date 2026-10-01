@@ -15,6 +15,91 @@ const turn = {
   currentComposition: { cards: [] },
 };
 
+describe("composeTurn provider fallback", () => {
+  const silent = () => undefined;
+
+  it("falls back to the rule-based provider when the primary throws, and says so", async () => {
+    await gateway.connect();
+    const failing: LlmProvider = {
+      name: "gemini",
+      async compose() {
+        throw new Error("quota exceeded");
+      },
+    };
+    const result = await composeTurn(
+      { gateway, provider: failing, fallbackProvider: new RuleBasedProvider(), log: silent },
+      turn,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fallback).toEqual({ from: "gemini", reason: expect.stringContaining("quota exceeded") });
+      expect(result.spec.cards.length).toBeGreaterThan(0);
+    }
+  }, 30000);
+
+  it("falls back when the primary's composition fails validation", async () => {
+    await gateway.connect();
+    const hallucinating: LlmProvider = {
+      name: "gemini",
+      async compose() {
+        return {
+          intentSummary: "환각",
+          cards: [
+            {
+              cardId: "x",
+              componentType: "BenefitCard",
+              entityRef: { toolResult: "searchBenefits", entityId: "made-up-benefit" },
+              rationale: "존재하지 않는 혜택",
+            },
+          ],
+          order: ["x"],
+        };
+      },
+    };
+    const result = await composeTurn(
+      { gateway, provider: hallucinating, fallbackProvider: new RuleBasedProvider(), log: silent },
+      turn,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.fallback).toEqual({ from: "gemini", reason: expect.stringMatching(/made-up-benefit/) });
+  }, 30000);
+
+  it("falls back when the primary exceeds the provider timeout", async () => {
+    await gateway.connect();
+    const hanging: LlmProvider = {
+      name: "gemini",
+      compose: () => new Promise(() => undefined),
+    };
+    const result = await composeTurn(
+      { gateway, provider: hanging, fallbackProvider: new RuleBasedProvider(), providerTimeoutMs: 20, log: silent },
+      turn,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.fallback).toEqual({ from: "gemini", reason: expect.stringMatching(/20ms/) });
+  }, 30000);
+
+  it("records no fallback when the primary succeeds", async () => {
+    await gateway.connect();
+    const result = await composeTurn(
+      { gateway, provider: new RuleBasedProvider(), fallbackProvider: new RuleBasedProvider(), log: silent },
+      turn,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.fallback).toBeUndefined();
+  }, 30000);
+
+  it("surfaces the primary's failure when no fallback provider is configured", async () => {
+    await gateway.connect();
+    const failing: LlmProvider = {
+      name: "gemini",
+      async compose() {
+        throw new Error("quota exceeded");
+      },
+    };
+    await expect(composeTurn({ gateway, provider: failing, log: silent }, turn)).rejects.toThrow("quota exceeded");
+  }, 30000);
+});
+
 describe("composeTurn (live gateway + rule-based provider)", () => {
   it("searches the gateway, composes, and expands to A2UI surfaces", async () => {
     await gateway.connect();
