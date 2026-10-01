@@ -94,6 +94,10 @@ interface InteractiveOptions {
   checkedItems?: number[];
   /** Compose without checklist-a (the candidate's Checklist drops out of this turn). */
   withoutChecklist?: boolean;
+  /** Stamped on the composition frame: who composed it. */
+  composedBy?: { provider: string; fallbackFrom?: string };
+  /** Returned by /api/session: what the shell is connected to. */
+  gateway?: { provider: string; fallbackProvider?: string; dataMode: string; version?: string };
 }
 
 function interactiveCompositionSse(options: InteractiveOptions = {}): string {
@@ -183,7 +187,14 @@ function interactiveCompositionSse(options: InteractiveOptions = {}): string {
   ];
   return (
     sseFrame({ kind: "intent", text: "테스트 의도 문장" }) +
-    sseFrame({ kind: "composition", compositionId: "comp-interactive", messages, cards, ...(options.nextSeq !== undefined ? { nextSeq: options.nextSeq } : {}) })
+    sseFrame({
+      kind: "composition",
+      compositionId: "comp-interactive",
+      messages,
+      cards,
+      ...(options.nextSeq !== undefined ? { nextSeq: options.nextSeq } : {}),
+      ...(options.composedBy ? { composedBy: options.composedBy } : {}),
+    })
   );
 }
 
@@ -195,7 +206,11 @@ function interactiveFetch(options: InteractiveOptions & { sessionNextSeq?: numbe
     const url = String(input);
     if (url.endsWith("/api/session")) {
       return new Response(
-        JSON.stringify({ sessionId: SESSION_ID, ...(options.sessionNextSeq !== undefined ? { nextSeq: options.sessionNextSeq } : {}) }),
+        JSON.stringify({
+          sessionId: SESSION_ID,
+          ...(options.sessionNextSeq !== undefined ? { nextSeq: options.sessionNextSeq } : {}),
+          ...(options.gateway ? { gateway: options.gateway } : {}),
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
@@ -342,10 +357,10 @@ describe("App", () => {
         "추천 결과는 신청 가능성을 보장하지 않는 후보 정보입니다. 자격·마감일·서류는 출처 페이지에서 확인하고 해당 기관의 공식 주소인지 다시 확인하세요.",
       ),
     ).toBeInTheDocument();
+    // This session response carries no gateway report, so the notice line says
+    // so; the reported form is covered by "describes the connected gateway…".
     expect(
-      screen.getByText(
-        "현재 연결된 게이트웨이 v0.3.0은 검증용 예시(fixture) 데이터를 제공합니다. 실제 정책 데이터가 아닙니다.",
-      ),
+      screen.getByText("연결된 게이트웨이의 데이터 모드와 구성 방식은 연결되면 여기에 표시됩니다."),
     ).toBeInTheDocument();
     expect(screen.getByRole("searchbox", { name: "혜택 검색" })).toHaveAttribute(
       "maxlength",
@@ -1211,6 +1226,28 @@ describe("App — interactive catalog", () => {
     const cardList = await openCardList(user);
     expect(await cardList.findByText("혜택 A", { selector: "button" })).toBeInTheDocument();
     expect(appStatus()).toHaveTextContent("테스트 의도 문장");
+  });
+
+  it("describes the connected gateway's data mode and composer in the notice line", async () => {
+    interactiveFetch({
+      gateway: { provider: "gemini", fallbackProvider: "rule-based", dataMode: "fixture", version: "0.3.0" },
+    });
+    render(<App />);
+    expect(
+      await screen.findByText(
+        "현재 연결된 게이트웨이 v0.3.0은 검증용 예시(fixture) 데이터를 제공하고 추천 구성은 Gemini가 맡으며 응답이 없으면 규칙 기반으로 대신합니다. 실제 정책 데이터가 아닙니다.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says when the rule-based provider composed the turn because the LLM failed", async () => {
+    interactiveFetch({ composedBy: { provider: "rule-based", fallbackFrom: "gemini" } });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() =>
+      expect(appStatus()).toHaveTextContent("테스트 의도 문장 Gemini 응답을 받지 못해 규칙 기반으로 구성했습니다."),
+    );
   });
 
   it("records checklist ticks as trace events and undoes them with the inverse event", async () => {

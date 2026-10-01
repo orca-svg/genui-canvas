@@ -52,10 +52,13 @@ export interface GatewayClientOptions {
 const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
 
 /** The LLM-free gateway receives only the SDK's safe runtime allowlist. */
+/** The data mode the canvas starts its gateway in; the session response repeats it to the shell. */
+export const GATEWAY_REPOSITORY_MODE = "fixture";
+
 export function createGatewayEnvironment(dbPath: string): Record<string, string> {
   return {
     ...getDefaultEnvironment(),
-    MCP_GEN_UI_REPOSITORY_MODE: "fixture",
+    MCP_GEN_UI_REPOSITORY_MODE: GATEWAY_REPOSITORY_MODE,
     MCP_GEN_UI_DB_PATH: dbPath,
   };
 }
@@ -154,6 +157,11 @@ export class GatewayClient {
       this.client = null;
       throw error;
     }
+  }
+
+  /** The connected gateway's own version from the MCP handshake; undefined before connect(). */
+  get serverVersion(): string | undefined {
+    return this.client?.getServerVersion()?.version;
   }
 
   private async call<TSchema extends z.ZodTypeAny>(

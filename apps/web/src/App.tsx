@@ -29,9 +29,11 @@ import {
   createSession,
   postEvent,
   postTurn,
+  type GatewayInfo,
   type SessionHandle,
   type TurnBody,
 } from "./api/client.js";
+import { withParticle } from "@/lib/korean";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanvasRows } from "./components/CanvasRows.js";
 import { EdgeDrawer, rowNeighbour, type RowDirection } from "./components/EdgeDrawer.js";
@@ -187,8 +189,37 @@ function mergeShell(prev: ShellState, compositionId: string, cards: CompositionC
   };
 }
 
+/** User-facing name of a composer the server reports ("rule-based", "gemini"). */
+function providerLabel(name: string): string {
+  if (name === "rule-based") return "규칙 기반";
+  if (name === "gemini") return "Gemini";
+  return name;
+}
+
+/** The notice line's sentence about what the shell is connected to. */
+function gatewayNotice(gateway: GatewayInfo | null): string {
+  if (!gateway) return "연결된 게이트웨이의 데이터 모드와 구성 방식은 연결되면 여기에 표시됩니다.";
+  const subject = `연결된 게이트웨이${gateway.version ? ` v${gateway.version}` : ""}`;
+  const fixture = gateway.dataMode === "fixture";
+  const data = fixture ? "검증용 예시(fixture) 데이터" : `${gateway.dataMode} 데이터`;
+  const composer =
+    gateway.provider === "rule-based"
+      ? "규칙 기반입니다"
+      : gateway.fallbackProvider
+        ? `${providerLabel(gateway.provider)}가 맡으며 응답이 없으면 ${providerLabel(gateway.fallbackProvider)}으로 대신합니다`
+        : `${providerLabel(gateway.provider)}가 맡습니다`;
+  return `현재 ${withParticle(subject, "은/는")} ${data}를 제공하고 추천 구성은 ${composer}.${fixture ? " 실제 정책 데이터가 아닙니다." : ""}`;
+}
+
+/** Appended to the composition summary when the fallback provider composed the turn. */
+function fallbackNote(composedBy: { provider: string; fallbackFrom?: string } | undefined): string {
+  if (!composedBy?.fallbackFrom) return "";
+  return ` ${providerLabel(composedBy.fallbackFrom)} 응답을 받지 못해 ${providerLabel(composedBy.provider)}으로 구성했습니다.`;
+}
+
 export function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [gateway, setGateway] = useState<GatewayInfo | null>(null);
   const [shell, setShell] = useState<ShellState>(() => createShellState("comp-0", []));
   const [messages, setMessages] = useState<A2uiMessages>([] as unknown as A2uiMessages);
   const [query, setQuery] = useState(SCENARIOS[0]!.query);
@@ -273,6 +304,7 @@ export function App() {
         if (!active) return;
         seqRef.current = handle.nextSeq;
         setSessionId(handle.sessionId);
+        setGateway(handle.gateway ?? null);
       })
       .catch(() => {
         if (sessionRequestRef.current === request) sessionRequestRef.current = null;
@@ -354,7 +386,8 @@ export function App() {
               : visibleCardCount > 0
                 ? `${visibleCardCount}개 카드를 구성했습니다.`
                 : "보이는 카드가 없습니다. 숨긴 카드는 ‘카드 목록’에서 ‘다시 보기’로 표시할 수 있습니다.";
-        setIntent(hadHistory ? `${summary} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : summary);
+        const composed = `${summary}${fallbackNote(composition.composedBy)}`;
+        setIntent(hadHistory ? `${composed} 실행 취소 이력은 새 구성에서 다시 시작합니다.` : composed);
         try {
           await enqueueTrace((seq) =>
             deriveCompositionAppliedEvent(nextShell, {
@@ -669,9 +702,7 @@ export function App() {
               추천 결과는 신청 가능성을 보장하지 않는 후보 정보입니다. 자격·마감일·서류는 출처 페이지에서 확인하고
               해당 기관의 공식 주소인지 다시 확인하세요.
             </span>{" "}
-            <span>
-              현재 연결된 게이트웨이 v0.3.0은 검증용 예시(fixture) 데이터를 제공합니다. 실제 정책 데이터가 아닙니다.
-            </span>
+            <span>{gatewayNotice(gateway)}</span>
           </p>
           <section id="recommendation-results" className="canvas" aria-label="추천 결과" tabIndex={-1}>
             {shell.cards.length === 0 && (

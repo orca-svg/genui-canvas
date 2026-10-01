@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInteractionEvent, ServerEventSchema } from "@genui-canvas/contracts";
 import { GatewayClient, GatewayCompatibilityError } from "./mcp/gateway-client.js";
-import { RuleBasedProvider } from "./llm/provider.js";
+import { RuleBasedProvider, type LlmProvider } from "./llm/provider.js";
 import { TraceStore } from "./trace/store.js";
 import { createApp } from "./app.js";
 
@@ -734,5 +734,60 @@ describe("server-side trace bookkeeping", () => {
     expect(text).not.toContain("evil.example");
     const composition = frames.find((f) => f.kind === "composition") as { cards: unknown[] } | undefined;
     expect(composition?.cards.length).toBeGreaterThan(0);
+  });
+});
+
+describe("provider reporting", () => {
+  const turnBody = (sessionId: string) =>
+    JSON.stringify({
+      sessionId,
+      trigger: { type: "query.submit", text: "서울 대학생 지원" },
+      profile: { regionCode: "KR-11", studentStatus: "student" },
+      currentComposition: { cards: [] },
+    });
+  const jsonHeaders = { "content-type": "application/json" };
+
+  it("tells the shell which provider, data mode and gateway version it talks to", async () => {
+    const res = await app.request("/api/session", { method: "POST" });
+    const body = (await res.json()) as { gateway?: Record<string, unknown> };
+    expect(body.gateway).toEqual({
+      provider: "rule-based",
+      dataMode: "fixture",
+      version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+    });
+  });
+
+  it("stamps every composition with the provider that composed it", async () => {
+    const sessionId = await issueSession();
+    const turn = await app.request("/api/turn", { method: "POST", headers: jsonHeaders, body: turnBody(sessionId) });
+    const composition = sseFrames(await turn.text()).find((f) => f.kind === "composition") as {
+      composedBy?: unknown;
+    };
+    expect(composition.composedBy).toEqual({ provider: "rule-based" });
+  });
+
+  it("composes with the fallback provider when the primary fails, and says so instead of erroring", async () => {
+    const failing: LlmProvider = {
+      name: "gemini",
+      async compose() {
+        throw new Error("quota exceeded");
+      },
+    };
+    const local = createApp({
+      gateway,
+      provider: failing,
+      fallbackProvider: new RuleBasedProvider(),
+      traceStore,
+      log: () => undefined,
+    });
+    const session = await local.request("/api/session", { method: "POST" });
+    const body = (await session.json()) as { sessionId: string; gateway: { fallbackProvider?: string } };
+    expect(body.gateway.fallbackProvider).toBe("rule-based");
+    const turn = await local.request("/api/turn", { method: "POST", headers: jsonHeaders, body: turnBody(body.sessionId) });
+    const frames = sseFrames(await turn.text());
+    expect(frames.some((f) => f.kind === "error")).toBe(false);
+    const composition = frames.find((f) => f.kind === "composition") as { composedBy?: unknown } | undefined;
+    expect(composition?.composedBy).toEqual({ provider: "rule-based", fallbackFrom: "gemini" });
+    expect(ServerEventSchema.safeParse(composition).success).toBe(true);
   });
 });
