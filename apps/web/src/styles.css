@@ -164,8 +164,7 @@ input:disabled {
   padding: clamp(0.875rem, 3vw, 1.125rem);
 }
 
-/* An empty slot keeps its grid cell so the columns of neighbouring rows stay
-   aligned, but draws nothing: what the next recomposition brings is said in
+/* An empty slot draws nothing: what the next recomposition brings is said in
    one line under the row (.canvas-row__hint), not in a dashed placeholder. */
 .genui-canvas-slot--empty {
   border: 0;
@@ -173,14 +172,32 @@ input:disabled {
   padding: 0;
 }
 
-/* A row with nothing composed beside its BenefitCard gives the card the whole
-   width; once a ScoreBreakdown, Checklist, or SourceNotice arrives the row
-   returns to its columns so candidates line up. */
-.genui-canvas-row:not(:has(.genui-canvas-card:not([data-column="benefit"]))) {
-  grid-template-columns: minmax(0, 1fr);
-}
-.genui-canvas-row:not(:has(.genui-canvas-card:not([data-column="benefit"]))) .genui-canvas-slot--empty {
+/* The BenefitCard takes the room of every slot nothing was composed into.
+   Its row drops the empty cells and the card spans one more track per empty
+   slot, so the sub-cards that did arrive keep their width and sit to its
+   right, and the card's text fills the rest of the row. (A row without a
+   BenefitCard keeps its empty cells, so its sub-cards stay in their columns.) */
+.genui-canvas-row:has(> .genui-canvas-card[data-column="benefit"]) > .genui-canvas-slot--empty {
   display: none;
+}
+@media (min-width: 64.01rem) {
+  .genui-canvas-row:has(> .genui-canvas-slot--empty) > .genui-canvas-card[data-column="benefit"] {
+    grid-column: span 2;
+  }
+  .genui-canvas-row:has(> .genui-canvas-slot--empty ~ .genui-canvas-slot--empty) > .genui-canvas-card[data-column="benefit"] {
+    grid-column: span 3;
+  }
+  .genui-canvas-row:has(> .genui-canvas-slot--empty ~ .genui-canvas-slot--empty ~ .genui-canvas-slot--empty) > .genui-canvas-card[data-column="benefit"] {
+    grid-column: 1 / -1;
+  }
+}
+/* Two tracks: the card goes full width above two sub-cards or when it is
+   alone, and stays beside a single sub-card. */
+@media (max-width: 64rem) and (min-width: 48.01rem) {
+  .genui-canvas-row:has(> .genui-canvas-slot--empty):not(:has(> .genui-canvas-slot--empty ~ .genui-canvas-slot--empty)) > .genui-canvas-card[data-column="benefit"],
+  .genui-canvas-row:has(> .genui-canvas-slot--empty ~ .genui-canvas-slot--empty ~ .genui-canvas-slot--empty) > .genui-canvas-card[data-column="benefit"] {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 48rem) {

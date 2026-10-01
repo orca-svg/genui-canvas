@@ -49,9 +49,12 @@ immediate control over the resulting canvas.
   then `ScoreBreakdown`, `Checklist`, and `SourceNotice` in fixed columns so
   candidates line up (two columns between 48rem and 64rem, stacked under
   48rem). `PersonaSelector` is a band on top and `DeadlineList` a band at the
-  bottom. A row with nothing composed beside its `BenefitCard` gives the card
-  the whole width; empty slots draw nothing, and one quiet line under the row
-  says what the next recomposition adds, such as "고정 후 재구성 → 점수 분석".
+  bottom. The `BenefitCard` takes the room of every slot nothing was composed
+  into: alone it spans the whole row, and next to a `Checklist` and
+  `SourceNotice` without a `ScoreBreakdown` it spans the first two columns, so
+  the cards that did arrive keep their width on its right. One quiet line
+  under the row says what the next recomposition adds, such as "고정 후 재구성
+  → 점수 분석".
   When every card is hidden, the canvas says so and points to the card list.
 - The top toolbar holds the scenarios, search, **추천 관점**, **실행 취소**,
   **다시 실행**, and **조작 반영해 재구성** with the count of pending

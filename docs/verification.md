@@ -164,10 +164,13 @@ Required manual/browser checks:
 12. After "조작 반영해 재구성", a card hidden earlier still appears in the
     card list as hidden and "다시 보기" shows it immediately.
 13. At 1920 CSS pixels the canvas spans the viewport width inside the page
-    padding; a candidate with a `ScoreBreakdown`, `Checklist`, or
-    `SourceNotice` is one row with those cards in aligned columns, while a
-    candidate with nothing composed beside its `BenefitCard` gives the card
-    the whole row width; empty slots draw nothing, and one line under the row
+    padding; each candidate is one row whose `BenefitCard` takes the room of
+    every slot nothing was composed into (the whole row when it is alone, the
+    first two of four columns beside a `Checklist` and `SourceNotice` without
+    a `ScoreBreakdown`, three columns beside a lone `ScoreBreakdown`; between
+    48rem and 64rem it spans both tracks above two sub-cards or when alone),
+    while the sub-cards that arrived keep their column width on its right;
+    no empty slot is visible in a row with a `BenefitCard`, and one line under the row
     names what the next recomposition adds ("고정 후 재구성 → 점수 분석" on an
     unpinned candidate, "재구성 → 점수 분석" once it is pinned, "재구성 →
     체크리스트·출처 안내 · 고정 후 재구성 → 점수 분석" on an expanded unpinned
