@@ -36,9 +36,12 @@ immediate control over the resulting canvas.
   reorders candidate rows, and pinned rows move only among pinned rows.
   **더 알아보기** marks a candidate expanded; its `Checklist` and
   `SourceNotice` arrive with the next **조작 반영해 재구성**, and the empty
-  slots in its row say so. **고정** and **숨기기** sit on the card too; a pin
-  likewise brings the `ScoreBreakdown` with the next recomposition, and the
-  empty score slot says so before and after the pin. Hiding a row on the card
+  slots in its row say so. **고정**, **숨기기**, and **출처** are always
+  visible on the card rather than revealed on hover; a pin likewise brings the
+  `ScoreBreakdown` with the next recomposition, and the empty score slot says
+  so before and after the pin. A collapsed `BenefitCard` previews its first
+  18rem, which is the title, agency, status, summary, and one score line; the
+  score breakdown itself lives only in the `ScoreBreakdown` card. Hiding a row on the card
   or with H leaves an inline **되돌리기** strip for six seconds, and focus
   moves to it so the undo is reachable by keyboard; a hide from the card list
   leaves no strip.
@@ -66,8 +69,9 @@ immediate control over the resulting canvas.
 - Keyboard: rows are focusable, and P, H, and E pin, hide, and expand the
   focused row. The typed letter counts, so a Dvorak or AZERTY user presses the
   letter itself; under a Korean input source, where the key types a jamo, the
-  physical key stands in. A keyboard-focused row reveals its 고정 and 숨기기
-  buttons and declares the keys with `aria-keyshortcuts`. On the handle, Space
+  physical key stands in. A focused row declares the keys with
+  `aria-keyshortcuts`, and the buttons they stand for are always on the card.
+  On the handle, Space
   picks a row up, the arrow keys move it, Enter drops it, and Esc cancels,
   with Korean announcements for screen readers.
 - Every accepted action is a bounded, structured event, whether it starts on
@@ -183,6 +187,15 @@ LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-own-key
 GEMINI_MODEL=gemini-flash-latest
 ```
+
+A BYOK provider never breaks the canvas. When Gemini throws, exceeds the
+12-second timeout, or returns a spec that fails validation, the server logs
+the cause and the rule-based provider composes that turn; the composition is
+stamped `composedBy: { provider: "rule-based", fallbackFrom: "gemini" }` and
+the shell's status line ends with "Gemini 응답을 받지 못해 규칙 기반으로
+구성했습니다". `POST /api/session` reports the active provider, the fallback,
+the gateway's data mode, and its MCP handshake version, which the notice line
+under the toolbar shows instead of assuming fixture data.
 
 The default follows the requested `gemini-flash-latest` alias documented on
 [Google's model page](https://ai.google.dev/gemini-api/docs/models). Google
