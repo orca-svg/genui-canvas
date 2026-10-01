@@ -35,11 +35,11 @@ immediate control over the resulting canvas.
 - Manipulation lives on the card. A drag handle (`{title} 순서 바꾸기`)
   reorders candidate rows, and pinned rows move only among pinned rows.
   **더 알아보기** marks a candidate expanded; its `Checklist` and
-  `SourceNotice` arrive with the next **조작 반영해 재구성**, and the empty
-  slots in its row say so. **고정**, **숨기기**, and **출처** are always
+  `SourceNotice` arrive with the next **조작 반영해 재구성**, and the line
+  under its row says so. **고정**, **숨기기**, and **출처** are always
   visible on the card rather than revealed on hover; a pin likewise brings the
-  `ScoreBreakdown` with the next recomposition, and the empty score slot says
-  so before and after the pin. A collapsed `BenefitCard` previews its first
+  `ScoreBreakdown` with the next recomposition, and that line says so before
+  and after the pin. A collapsed `BenefitCard` previews its first
   18rem, which is the title, agency, status, summary, and one score line; the
   score breakdown itself lives only in the `ScoreBreakdown` card. Hiding a row on the card
   or with H leaves an inline **되돌리기** strip for six seconds, and focus
@@ -49,9 +49,13 @@ immediate control over the resulting canvas.
   then `ScoreBreakdown`, `Checklist`, and `SourceNotice` in fixed columns so
   candidates line up (two columns between 48rem and 64rem, stacked under
   48rem). `PersonaSelector` is a band on top and `DeadlineList` a band at the
-  bottom. An empty slot draws nothing unless it carries a hint, such as
-  "고정한 뒤 재구성하면 점수 분석이 여기 옵니다". When every card is hidden,
-  the canvas says so and points to the card list.
+  bottom. The `BenefitCard` takes the room of every slot nothing was composed
+  into: alone it spans the whole row, and next to a `Checklist` and
+  `SourceNotice` without a `ScoreBreakdown` it spans the first two columns, so
+  the cards that did arrive keep their width on its right. One quiet line
+  under the row says what the next recomposition adds, such as "고정 후 재구성
+  → 점수 분석".
+  When every card is hidden, the canvas says so and points to the card list.
 - The top toolbar holds the scenarios, search, **추천 관점**, **실행 취소**,
   **다시 실행**, and **조작 반영해 재구성** with the count of pending
   manipulations (exposed as the button's accessible description,

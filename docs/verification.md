@@ -164,13 +164,18 @@ Required manual/browser checks:
 12. After "조작 반영해 재구성", a card hidden earlier still appears in the
     card list as hidden and "다시 보기" shows it immediately.
 13. At 1920 CSS pixels the canvas spans the viewport width inside the page
-    padding; each candidate is one row with its `BenefitCard`,
-    `ScoreBreakdown`, `Checklist`, and `SourceNotice` in aligned columns; an
-    empty slot draws nothing unless it carries a hint ("고정한 뒤 재구성하면
-    점수 분석이 여기 옵니다" on an unpinned candidate, "재구성하면 점수 분석이
-    여기 옵니다" once it is pinned, and "재구성하면 체크리스트가 여기 옵니다" and
-    "재구성하면 출처 안내가 여기 옵니다" on an expanded one; a row without a
-    `BenefitCard` shows none).
+    padding; each candidate is one row whose `BenefitCard` takes the room of
+    every slot nothing was composed into (the whole row when it is alone, the
+    first two of four columns beside a `Checklist` and `SourceNotice` without
+    a `ScoreBreakdown`, three columns beside a lone `ScoreBreakdown`; between
+    48rem and 64rem it spans both tracks above two sub-cards or when alone),
+    while the sub-cards that arrived keep their column width on its right;
+    no empty slot is visible in a row with a `BenefitCard`, and one line under the row
+    names what the next recomposition adds ("고정 후 재구성 → 점수 분석" on an
+    unpinned candidate, "재구성 → 점수 분석" once it is pinned, "재구성 →
+    체크리스트·출처 안내 · 고정 후 재구성 → 점수 분석" on an expanded unpinned
+    one; a row without a `BenefitCard`, or with nothing pending, shows no
+    line).
 14. Dragging a row by its handle shows a ghost and a placeholder; dropping it
     records one `card.reorder`; a pinned row cannot be dropped among unpinned
     rows (the placeholder stops and the hint "고정된 카드는 고정 그룹 안에서만

@@ -81,36 +81,39 @@ describe("CanvasRows", () => {
     expect(within(rowA).getByText("점수 A")).toBeInTheDocument();
   });
 
-  it("explains the two-step model in empty slots once a row is expanded", async () => {
+  it("says in one line under the row what the next recomposition adds, and draws no slot placeholder", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     const rowB = await screen.findByRole("group", { name: "월세 지원 카드" });
-    expect(within(rowB).queryByText("재구성하면 체크리스트가 여기 옵니다")).toBeNull();
-    expect(within(rowB).queryByText("재구성하면 출처 안내가 여기 옵니다")).toBeNull();
+    // Nothing composed beside the card yet: one quiet line, no dashed slot text.
+    expect(within(rowB).getByText("고정 후 재구성 → 점수 분석")).toHaveClass("canvas-row__hint");
+    expect(rowB.querySelectorAll(".genui-canvas-slot--empty")).toHaveLength(3);
+    for (const slot of rowB.querySelectorAll(".genui-canvas-slot--empty")) expect(slot).toBeEmptyDOMElement();
     await user.click(within(rowB).getByRole("button", { name: "월세 지원 더 알아보기" }));
-    expect(within(rowB).getByText("고정한 뒤 재구성하면 점수 분석이 여기 옵니다")).toBeInTheDocument();
-    expect(within(rowB).getByText("재구성하면 체크리스트가 여기 옵니다")).toBeInTheDocument();
-    expect(within(rowB).getByText("재구성하면 출처 안내가 여기 옵니다")).toBeInTheDocument();
+    expect(within(rowB).getByText("재구성 → 체크리스트·출처 안내 · 고정 후 재구성 → 점수 분석")).toBeInTheDocument();
     expect(within(rowB).getByRole("button", { name: "월세 지원 접기" })).toBeInTheDocument();
+    // Row A already has its ScoreBreakdown and is not expanded: nothing is pending.
+    const rowA = screen.getByRole("group", { name: "국가장학금 카드" });
+    expect(within(rowA).queryByText(/재구성/)).toBeNull();
   });
 
-  it("keeps the score hint after pinning and says the recomposition brings it", async () => {
+  it("drops the pin step from the line once the row is pinned", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     const rowB = await screen.findByRole("group", { name: "월세 지원 카드" });
-    expect(within(rowB).getByText("고정한 뒤 재구성하면 점수 분석이 여기 옵니다")).toBeInTheDocument();
+    expect(within(rowB).getByText("고정 후 재구성 → 점수 분석")).toBeInTheDocument();
     await user.click(within(rowB).getByRole("button", { name: "월세 지원 고정" }));
     // pinning moves the row to the front, so look it up again
     const pinned = screen.getByRole("group", { name: "월세 지원 카드" });
-    expect(within(pinned).getByText("재구성하면 점수 분석이 여기 옵니다")).toBeInTheDocument();
-    expect(within(pinned).queryByText("고정한 뒤 재구성하면 점수 분석이 여기 옵니다")).toBeNull();
+    expect(within(pinned).getByText("재구성 → 점수 분석")).toBeInTheDocument();
+    expect(within(pinned).queryByText(/고정 후/)).toBeNull();
   });
 
   it("gives an orphan row (no BenefitCard to pin or expand) no hints", async () => {
     const start = createShellState("c", [{ cardId: "checklist-x", entityId: "x", componentType: "Checklist" }]);
     await mount(<Harness start={start} />);
     const orphan = screen.getByRole("group", { name: "x 카드" });
-    expect(orphan.querySelector(".genui-canvas-slot__hint")).toBeNull();
+    expect(orphan.querySelector(".canvas-row__hint")).toBeNull();
   });
 
   it("never marks a sub-card as a benefit or band cell, so the collapsed-preview clip cannot reach it", async () => {
