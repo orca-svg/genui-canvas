@@ -164,21 +164,23 @@ input:disabled {
   padding: clamp(0.875rem, 3vw, 1.125rem);
 }
 
+/* An empty slot keeps its grid cell so the columns of neighbouring rows stay
+   aligned, but draws nothing: what the next recomposition brings is said in
+   one line under the row (.canvas-row__hint), not in a dashed placeholder. */
 .genui-canvas-slot--empty {
-  border: 1px dashed #d6deea;
-  border-radius: 0.875rem;
-  min-height: 4rem;
-  color: #7a889f;
-  font-size: 0.8125rem;
-  padding: 0.75rem;
-}
-
-/* A slot with no hint text keeps its grid cell (so columns stay aligned) but
-   draws nothing; only hint-bearing slots show the dashed placeholder. */
-.genui-canvas-slot--empty:empty {
   border: 0;
   min-height: 0;
   padding: 0;
+}
+
+/* A row with nothing composed beside its BenefitCard gives the card the whole
+   width; once a ScoreBreakdown, Checklist, or SourceNotice arrives the row
+   returns to its columns so candidates line up. */
+.genui-canvas-row:not(:has(.genui-canvas-card:not([data-column="benefit"]))) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.genui-canvas-row:not(:has(.genui-canvas-card:not([data-column="benefit"]))) .genui-canvas-slot--empty {
+  display: none;
 }
 
 @media (max-width: 48rem) {
@@ -186,8 +188,8 @@ input:disabled {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* One column: a hint-less cell would only add a row-gap, so it goes away. */
-  .genui-canvas-slot--empty:empty {
+  /* One column: an empty cell would only add a row-gap, so it goes away. */
+  .genui-canvas-slot--empty {
     display: none;
   }
 }
@@ -292,12 +294,13 @@ input:disabled {
 /* Sortable candidate rows, drag handle, and the hide-undo strip. */
 .canvas-rows { display: grid; gap: 0.75rem; }
 .canvas-rows__hint { margin: 0; color: #1f4fb8; font-size: 0.875rem; }
+/* One quiet line under a row: what the next 조작 반영해 재구성 will add beside the card. */
+.canvas-row__hint { margin: 0.375rem 0 0; padding: 0 0.25rem; color: #7a889f; font-size: 0.8125rem; }
 .canvas-row-item:focus-visible { outline: 3px solid #1f5bd7; outline-offset: 4px; border-radius: 1rem; }
 .card-chrome__handle { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: 0; border-radius: 0.5rem; background: transparent; color: #64748b; cursor: grab; touch-action: none; }
 .card-chrome__handle:active { cursor: grabbing; }
 .card-chrome__handle:hover { background: #edf3ff; }
 .canvas-row-ghost { border-radius: 0.875rem; background: #fff; box-shadow: 0 0.75rem 2rem rgb(29 50 86 / 20%); padding: 0.75rem 1rem; font-weight: 700; }
-.genui-canvas-slot__hint { display: block; }
 .hidden-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; border: 1px dashed #b9c5d8; border-radius: 0.875rem; background: #f6f8fc; padding: 0.625rem 0.875rem; color: #34455f; font-size: 0.875rem; }
 @media (max-width: 48rem) { .card-chrome__handle { width: 2.75rem; height: 2.75rem; } }
 

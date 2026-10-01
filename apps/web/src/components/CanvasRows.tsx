@@ -64,24 +64,32 @@ interface Notice {
  * The score hint stays after the pin (only its wording changes) so the second
  * step is still explained; an orphan row has nothing to pin or expand.
  */
-function emptySlotHint(column: string, row: CanvasRow): string | null {
-  switch (column) {
-    case "score":
-      if (!row.benefitCardId) return null;
-      return row.pinned ? "재구성하면 점수 분석이 여기 옵니다" : "고정한 뒤 재구성하면 점수 분석이 여기 옵니다";
-    case "checklist":
-      return row.expanded ? "재구성하면 체크리스트가 여기 옵니다" : null;
-    case "source":
-      return row.expanded ? "재구성하면 출처 안내가 여기 옵니다" : null;
-    default:
-      return null;
+/**
+ * One quiet line under a candidate row naming what the next 조작 반영해 재구성
+ * adds beside the card, grouped by what the user still has to do: nothing
+ * ("재구성 → …") or pin first ("고정 후 재구성 → …"). Null when nothing is
+ * pending, so a row never advertises a card it already has.
+ */
+function rowHint(row: CanvasRow): string | null {
+  if (!row.benefitCardId) return null;
+  const present = new Set(row.slots.map((slot) => slot.column));
+  const onRecompose: string[] = [];
+  const afterPin: string[] = [];
+  if (!present.has("score")) (row.pinned ? onRecompose : afterPin).push("점수 분석");
+  if (row.expanded) {
+    if (!present.has("checklist")) onRecompose.push("체크리스트");
+    if (!present.has("source")) onRecompose.push("출처 안내");
   }
+  const parts: string[] = [];
+  if (onRecompose.length > 0) parts.push(`재구성 → ${onRecompose.join("·")}`);
+  if (afterPin.length > 0) parts.push(`고정 후 재구성 → ${afterPin.join("·")}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 /**
  * The canvas as the shell sees it: bands and candidate rows derived from
  * `cards`, each row sortable by its handle, chrome on the BenefitCard, and
- * the two-step model explained inside empty slots.
+ * the two-step model explained in one line under each row.
  */
 export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watch, values, onValueChange }: CanvasRowsProps) {
   const groups = useMemo(() => deriveCanvasGroups(cards), [cards]);
@@ -249,15 +257,9 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
     );
   };
 
-  const renderEmptySlot = (column: string, group: CanvasGroup): ReactNode => {
-    const row = group.kind === "row" ? rowByKey.get(group.key) : undefined;
-    if (!row) return null;
-    const hint = emptySlotHint(column, row);
-    return hint ? <span className="genui-canvas-slot__hint">{hint}</span> : null;
-  };
-
   const renderGroup = (group: CanvasGroup, content: ReactNode): ReactNode => {
     const row = group.kind === "row" ? rowByKey.get(group.key) : undefined;
+    const hint = row ? rowHint(row) : null;
     const sortable = row ? isRowSortable(row) : false;
     const disabled = !sortable || (row !== undefined && rowBlocksDrop(activeRow, row));
     // SortableItem also spreads role="button" and tabindex onto its wrapper and
@@ -288,6 +290,7 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
         }
       >
         {content}
+        {hint ? <p className="canvas-row__hint">{hint}</p> : null}
       </SortableItem>
     );
     const strip =
@@ -368,7 +371,6 @@ export function CanvasRows({ cards, messages, busy, onManipulate, onAction, watc
           rowColumns={ROW_COLUMNS}
           renderGroup={renderGroup}
           renderChrome={renderChrome}
-          renderEmptySlot={renderEmptySlot}
           onAction={onAction}
           watch={watch}
           values={values}
