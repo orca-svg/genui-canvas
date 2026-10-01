@@ -155,9 +155,6 @@ describe("expandComposition — BenefitCard", () => {
       status: "candidate",
       reasons: ["재학생 조건과 일치합니다."],
       missingInfo: ["소득 구간 확인 필요"],
-      scoreBreakdown: [
-        expect.objectContaining({ dimension: "student", explanation: "재학생 조건과 일치합니다." }),
-      ],
       rationale: "테스트",
       sourceUrl: "https://www.gov.kr/official-benefit",
     });
@@ -559,6 +556,17 @@ describe("expandComposition — interactive catalog", () => {
     expect(byId.get("scoreRow")).toMatchObject({ component: "Row", children: ["scoreValue", "scoreCaveat"] });
     expect(value.scoreValueText).toBe("상대 관련도 96/100");
     expect(value.scoreCaveatText).toBe("자격 확률 아님");
+  });
+
+  it("leads the BenefitCard with the narrative and leaves the breakdown to the ScoreBreakdown card", () => {
+    const messages = expandComposition(specFor("national-scholarship"), fullCache());
+    const { body, byId, value } = surfaceParts(messages, "c1");
+    // The collapsed preview shows the first 18rem, so the summary must come before
+    // any score text, and the one-line score row is the only score the card carries.
+    expect(body.slice(0, 6)).toEqual(["title", "provider", "status", "summary", "divider-1", "scoreRow"]);
+    expect(body).not.toContain("scoreBreakdown");
+    expect(byId.has("scoreBreakdown")).toBe(false);
+    expect(value).not.toHaveProperty("scoreBreakdownText");
   });
 
   it("keeps a body under 100 children even with the maximum checklist rows", () => {

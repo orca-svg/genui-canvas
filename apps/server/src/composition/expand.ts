@@ -155,9 +155,6 @@ function benefitCardBody(
         .slice(0, MAX_DYNAMIC_ROWS)
     : [];
   const missingInfo = stringArray(assessment.missingInfo).slice(0, MAX_DYNAMIC_ROWS);
-  const scoreBreakdown = Array.isArray(ranking.breakdown)
-    ? ranking.breakdown.slice(0, MAX_DYNAMIC_ROWS)
-    : [];
   const sourceLink = preferredOfficialLink(detail.links, "source");
   const sourceUrl = sourceLink?.url;
   // Renamed on destructure: this function's own `value` (the data-model record below)
@@ -178,8 +175,6 @@ function benefitCardBody(
     missingInfo,
     missingInfoText:
       missingInfo.length > 0 ? `확인 필요: ${missingInfo.join(" · ")}` : "추가로 확인할 정보가 없습니다.",
-    scoreBreakdown,
-    scoreBreakdownText: scoreBreakdownLabel(scoreBreakdown),
     rationale: card.rationale,
     rationaleText: `구성 이유: ${card.rationale}`,
     candidateCaveat:
@@ -196,7 +191,10 @@ function benefitCardBody(
     "status",
     "summary",
     "divider-1",
-    ...(showScore ? ["scoreRow", "scoreBreakdown"] : []),
+    // The breakdown lives in the ScoreBreakdown card the shell composes after
+    // 더 알아보기 + 고정; the BenefitCard keeps one score line so its 18rem
+    // preview stays mostly narrative.
+    ...(showScore ? ["scoreRow"] : []),
     ...(showReasons ? ["reasons"] : []),
     "missingInfo",
     "divider-2",
@@ -221,7 +219,6 @@ function benefitCardBody(
       row("scoreRow", ["scoreValue", "scoreCaveat"]),
       text("scoreValue", "/scoreValueText", "h4"),
       text("scoreCaveat", "/scoreCaveatText", "caption"),
-      text("scoreBreakdown", "/scoreBreakdownText", "caption"),
     );
   }
   if (sourceUrl) components.push(text("source", "/sourceText", "caption"));
@@ -663,17 +660,6 @@ function sourceObservationText(
     .map((source) => `${String(source.sourceId ?? "unknown")}:${String(source.status ?? "unknown")}`)
     .join(", ");
   return `데이터 모드 ${mode} · ${coverage}${summary ? ` · ${summary}` : ""}`;
-}
-
-function scoreBreakdownLabel(items: unknown[]): string {
-  const explanations = items.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as Record<string, unknown>;
-    return typeof record.explanation === "string" ? [record.explanation] : [];
-  });
-  return explanations.length > 0
-    ? `점수 근거: ${explanations.join(" · ")}`
-    : "점수 근거가 제공되지 않았습니다.";
 }
 
 function assertNever(value: never): never {
