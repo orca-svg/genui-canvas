@@ -190,16 +190,37 @@ deterministic rule-based provider. To opt into Gemini, copy
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-own-key
 GEMINI_MODEL=gemini-flash-latest
+# optional: a second model tried when GEMINI_MODEL is overloaded, rate limited, or missing
+# GEMINI_FALLBACK_MODEL=gemini-flash-lite-latest
 ```
 
-A BYOK provider never breaks the canvas. When Gemini throws, exceeds the
-12-second timeout, or returns a spec that fails validation, the server logs
-the cause and the rule-based provider composes that turn; the composition is
-stamped `composedBy: { provider: "rule-based", fallbackFrom: "gemini" }` and
-the shell's status line ends with "Gemini 응답을 받지 못해 규칙 기반으로
-구성했습니다". `POST /api/session` reports the active provider, the fallback,
-the gateway's data mode, and its MCP handshake version, which the notice line
-under the toolbar shows instead of assuming fixture data.
+A BYOK provider never breaks the canvas. Gemini answers of HTTP 429 or 5xx
+are retried twice (after 400ms, then 800ms); a model that stays overloaded or
+rate limited, or does not exist for the key, hands over to
+`GEMINI_FALLBACK_MODEL` when one is set. A refused key or a non-JSON answer
+fails at once. When Gemini still fails, exceeds the 12-second timeout, or
+returns a spec that fails validation, the server logs the cause with anything
+key-shaped masked, and the rule-based provider composes that turn. The
+composition is stamped
+`composedBy: { provider: "rule-based", fallbackFrom: "gemini", fallbackReason }`
+and the shell's status line names the cause, for example "Gemini 서버가
+혼잡해(503) 규칙 기반으로 구성했습니다" or "Gemini 요청 한도를 넘어(429) 규칙
+기반으로 구성했습니다". `POST /api/session` reports the active provider, the
+fallback, the gateway's data mode, and its MCP handshake version, which the
+notice line under the toolbar shows instead of assuming fixture data.
+
+In practice a rolling `-latest` alias can point at the model with the most
+traffic. If the status line keeps reporting 503, pin `GEMINI_MODEL` to a model
+your key lists and set `GEMINI_FALLBACK_MODEL` to another one.
+
+The key stays on the server. The web bundle reads only `VITE_API_BASE`, the
+browser never receives the key, `apps/server/.env` is gitignored, and the
+safety scanner rejects key-shaped strings in tracked files. When you deploy,
+set `GEMINI_API_KEY` as the host's secret environment variable, never as a
+`VITE_` variable or in the repository. Anyone who can reach `/api/turn` can
+still spend your quota, so put a public deployment behind authentication or a
+rate limit, and restrict the key to the Generative Language API in the
+Google Cloud console.
 
 The default follows the requested `gemini-flash-latest` alias documented on
 [Google's model page](https://ai.google.dev/gemini-api/docs/models). Google

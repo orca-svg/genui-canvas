@@ -45,7 +45,7 @@ may print its expected experimental SQLite warning; this is not a test failure.
 | Trace bookkeeping | `session.start` at seq 0, one `tool.called` per turn, `nextSeq` on terminal events, client events continue the server sequence, bookkeeping rows excluded from the provider's recent history. |
 | Gateway boundary | Published v2 Zod schemas validate every response; malformed or unsupported versions fail visibly; `structuredContent` must deep-equal the JSON TextContent fallback. |
 | Model boundary | Prompt contains no raw query, title, summary, URL, or profile string; only safe semantic projection; strict structured output and hallucinated references are rejected; the streamed intent sentence passes the same markup/URL and definitive-eligibility rule as card rationales or is omitted. |
-| Provider fallback | When a fallback provider is configured, a primary that throws, exceeds the 12-second timeout, or returns an invalid spec is logged with its cause and the rule-based provider composes the turn; the composition frame carries `composedBy` with `fallbackFrom`; without a fallback the primary's behaviour is unchanged; `/api/session` reports `gateway.provider`, `fallbackProvider`, `dataMode`, and the MCP handshake `version`. |
+| Provider fallback | Gemini retries HTTP 429 and 5xx twice with growing waits, then tries `GEMINI_FALLBACK_MODEL` for an overloaded, rate-limited, or missing model; a refused key or non-JSON answer fails at once and is classified (`auth`, `invalid_response`); when a fallback provider is configured, a primary that throws, exceeds the 12-second timeout, or returns an invalid spec is logged with key-shaped text masked and the rule-based provider composes the turn; the composition frame carries `composedBy` with `fallbackFrom` and a `fallbackReason` from `PROVIDER_FAILURE_KINDS`, and only that kind reaches the browser; without a fallback the primary's behaviour is unchanged; `/api/session` reports `gateway.provider`, `fallbackProvider`, `dataMode`, and the MCP handshake `version`. |
 | Manipulation invariants | Hidden cards never enter the visible order but ship in a hidden tail the shell can unhide; pinned cards cannot be dropped/buried; explicit reorder survives; the visible order is grouped by candidate (`PersonaSelector` first, pinned groups next, fixed `BenefitCard → ScoreBreakdown → Checklist → SourceNotice` inside a group) — `enforce.test.ts`'s `candidate groups` suite proves this per-composition, and the CI replay's `groupedOrderPreserved` proves it holds on both the control and the manipulated composition of a live turn pair; `DeadlineList` last regardless of pin state (pinning it only guarantees it stays present) is proven by `enforce.test.ts`'s "keeps a pinned DeadlineList present but still last even though the provider led with it" and "restores a pinned DeadlineList the provider omitted entirely, placing it last" — the replay's fixture never pins `DeadlineList`, so it doesn't exercise that case; expanded → Checklist+SourceNotice, pinned → ScoreBreakdown, ticked rows keep Checklist; deterministic expansion preserves trusted tool data. |
 | Trust copy | Scores say “relative relevance, not eligibility probability”; `conflict_detected` remains a candidate-level verification warning; source health/freshness and non-adjudication caveats remain visible; no definitive eligibility wording. |
 | CI replay | Actual session→event→turn routes persist the full eleven-event sequence (including `session.start` and `tool.called` bookkeeping rows) and the second provider request observes server-derived pin/hide/reorder/expand signals. |
@@ -215,8 +215,10 @@ Required manual/browser checks:
     text appears on the BenefitCard at any width.
 26. The notice line reads the session response: with the rule-based provider
     it says "추천 구성은 규칙 기반입니다", and with `LLM_PROVIDER=gemini` plus
-    a failing key the composition still arrives and the status line ends with
-    "Gemini 응답을 받지 못해 규칙 기반으로 구성했습니다."
+    a failing key the composition still arrives and the status line names
+    the cause ("Gemini 키를 확인할 수 없어 규칙 기반으로 구성했습니다." for a
+    refused key, "Gemini 서버가 혼잡해(503) 규칙 기반으로 구성했습니다." when
+    the model stays overloaded).
 
 Retain screenshots and console/overflow measurements with the release record;
 do not infer this gate from unit tests alone.
