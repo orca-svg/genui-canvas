@@ -1,11 +1,27 @@
 import { GoogleGenAI } from "@google/genai";
 import { CATALOG_TOOL_RESULT_BY_COMPONENT } from "@genui-canvas/contracts";
-import type { ComposeRequest, LlmProvider } from "./provider.js";
+import type { ProviderFailureKind } from "@genui-canvas/contracts";
+import { ProviderError, type ComposeRequest, type LlmProvider } from "./provider.js";
 import { SYSTEM_PROMPT, buildComposePrompt } from "./prompts.js";
+
+type GenerateRequest = ReturnType<typeof buildGeminiGenerateRequest>;
+type Generate = (request: GenerateRequest) => Promise<{ text?: string | undefined }>;
 
 export interface GeminiProviderOptions {
   apiKey: string;
   model?: string;
+  /** Tried when `model` stays overloaded or rate limited after its retries, or does not exist. */
+  fallbackModel?: string;
+  /** Extra attempts per model for HTTP 429 and 5xx answers (default 2). */
+  maxRetries?: number;
+  /** Wait before the first retry; it doubles for each further retry (default 400ms). */
+  retryDelayMs?: number;
+  /** Receives one line when the fallback model answers (default: console.warn). */
+  log?: (message: string) => void;
+  /** Test seam: replaces the SDK's generateContent. */
+  generate?: Generate;
+  /** Test seam: replaces the wait between retries. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** Rolling Flash alias requested for BYOK composition. */
@@ -107,20 +123,92 @@ export function buildGeminiGenerateRequest(model: string, request: ComposeReques
  */
 export class GeminiProvider implements LlmProvider {
   readonly name = "gemini";
-  private readonly ai: GoogleGenAI;
+  private readonly generate: Generate;
   private readonly model: string;
+  private readonly fallbackModel: string | undefined;
+  private readonly maxRetries: number;
+  private readonly retryDelayMs: number;
+  private readonly log: (message: string) => void;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(options: GeminiProviderOptions) {
-    this.ai = new GoogleGenAI({ apiKey: options.apiKey });
+    if (options.generate) {
+      this.generate = options.generate;
+    } else {
+      const ai = new GoogleGenAI({ apiKey: options.apiKey });
+      this.generate = (request) => ai.models.generateContent(request);
+    }
     this.model = options.model ?? DEFAULT_GEMINI_MODEL;
+    this.fallbackModel = options.fallbackModel && options.fallbackModel !== this.model ? options.fallbackModel : undefined;
+    this.maxRetries = options.maxRetries ?? 2;
+    this.retryDelayMs = options.retryDelayMs ?? 400;
+    this.log = options.log ?? ((message) => console.warn(message));
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
+  /**
+   * Asks `model`, retrying HTTP 429 and 5xx answers with growing waits. When
+   * the model stays overloaded or rate limited, or does not exist for this
+   * key, `fallbackModel` gets the same treatment. A refused key or a non-JSON
+   * answer fails at once, since another attempt cannot fix either.
+   */
   async compose(request: ComposeRequest): Promise<unknown> {
-    const response = await this.ai.models.generateContent(
-      buildGeminiGenerateRequest(this.model, request),
-    );
-    return JSON.parse(stripCodeFences(response.text ?? "{}"));
+    try {
+      return await this.composeWith(this.model, request);
+    } catch (error) {
+      if (!this.fallbackModel || !(error instanceof ProviderError) || !SWITCH_MODEL_ON.has(error.kind)) throw error;
+      const answer = await this.composeWith(this.fallbackModel, request);
+      this.log(
+        `[genui-canvas] gemini model ${this.model} failed (${error.kind}); answered by fallback model ${this.fallbackModel}`,
+      );
+      return answer;
+    }
   }
+
+  private async composeWith(model: string, request: ComposeRequest): Promise<unknown> {
+    for (let attempt = 0; ; attempt += 1) {
+      let text: string;
+      try {
+        text = (await this.generate(buildGeminiGenerateRequest(model, request))).text ?? "{}";
+      } catch (caught) {
+        const failure = classifyGeminiError(caught, model);
+        if (!RETRY_ON.has(failure.kind) || attempt >= this.maxRetries) throw failure;
+        await this.sleep(this.retryDelayMs * 2 ** attempt);
+        continue;
+      }
+      try {
+        return JSON.parse(stripCodeFences(text));
+      } catch {
+        throw new ProviderError(`Gemini model ${model} answered with text that is not JSON`, "invalid_response");
+      }
+    }
+  }
+}
+
+/** Kinds worth another attempt on the same model. */
+const RETRY_ON = new Set<ProviderFailureKind>(["overloaded", "rate_limited"]);
+/** Kinds the fallback model may fix (a refused key or a bad answer it cannot). */
+const SWITCH_MODEL_ON = new Set<ProviderFailureKind>(["overloaded", "rate_limited", "model_unavailable"]);
+
+/** Maps an SDK error (its ApiError carries the HTTP `status`) to a ProviderError. */
+function classifyGeminiError(error: unknown, model: string): ProviderError {
+  const status =
+    error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  const kind: ProviderFailureKind =
+    status === 429
+      ? "rate_limited"
+      : status !== undefined && status >= 500
+        ? "overloaded"
+        : status === 404
+          ? "model_unavailable"
+          : status === 401 || status === 403 || (status === 400 && /api[ _-]?key/i.test(message))
+            ? "auth"
+            : "error";
+  const label = status === undefined ? "request failed" : `HTTP ${status}`;
+  return new ProviderError(`Gemini model ${model} ${label}: ${message.slice(0, 300)}`, kind, status);
 }
 
 function stripCodeFences(text: string): string {

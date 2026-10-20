@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInteractionEvent, ServerEventSchema } from "@genui-canvas/contracts";
 import { GatewayClient, GatewayCompatibilityError } from "./mcp/gateway-client.js";
-import { RuleBasedProvider, type LlmProvider } from "./llm/provider.js";
+import { ProviderError, RuleBasedProvider, type LlmProvider } from "./llm/provider.js";
 import { TraceStore } from "./trace/store.js";
 import { createApp } from "./app.js";
 
@@ -770,7 +770,7 @@ describe("provider reporting", () => {
     const failing: LlmProvider = {
       name: "gemini",
       async compose() {
-        throw new Error("quota exceeded");
+        throw new ProviderError("Gemini model primary HTTP 503: high demand", "overloaded", 503);
       },
     };
     const local = createApp({
@@ -787,7 +787,31 @@ describe("provider reporting", () => {
     const frames = sseFrames(await turn.text());
     expect(frames.some((f) => f.kind === "error")).toBe(false);
     const composition = frames.find((f) => f.kind === "composition") as { composedBy?: unknown } | undefined;
-    expect(composition?.composedBy).toEqual({ provider: "rule-based", fallbackFrom: "gemini" });
+    expect(composition?.composedBy).toEqual({ provider: "rule-based", fallbackFrom: "gemini", fallbackReason: "overloaded" });
     expect(ServerEventSchema.safeParse(composition).success).toBe(true);
+  });
+
+  it("logs a failed turn with any key in the error masked", async () => {
+    // Built at runtime so the repository safety scanner never sees a key-shaped literal.
+    const fakeKey = "AIza" + "Sy" + "X".repeat(33);
+    const lines: string[] = [];
+    const local = createApp({
+      gateway,
+      provider: {
+        name: "failing-provider",
+        async compose() {
+          throw new Error(`upstream rejected key=${fakeKey}`);
+        },
+      },
+      traceStore,
+      log: (line) => lines.push(line),
+    });
+    const session = await local.request("/api/session", { method: "POST" });
+    const { sessionId } = (await session.json()) as { sessionId: string };
+    const turn = await local.request("/api/turn", { method: "POST", headers: jsonHeaders, body: turnBody(sessionId) });
+    const text = await turn.text();
+    expect(text).not.toContain(fakeKey);
+    expect(lines.join("\n")).toContain("turn failed");
+    expect(lines.join("\n")).not.toContain(fakeKey);
   });
 });

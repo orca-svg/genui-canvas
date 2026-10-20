@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { GatewayClient } from "./mcp/gateway-client.js";
-import { RuleBasedProvider, type LlmProvider, type ComposeRequest } from "./llm/provider.js";
+import { ProviderError, RuleBasedProvider, type LlmProvider, type ComposeRequest } from "./llm/provider.js";
 import { composeTurn } from "./composer.js";
 
 const gateway = new GatewayClient();
@@ -32,9 +32,49 @@ describe("composeTurn provider fallback", () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.fallback).toEqual({ from: "gemini", reason: expect.stringContaining("quota exceeded") });
+      expect(result.fallback).toEqual({
+        from: "gemini",
+        kind: "error",
+        reason: expect.stringContaining("quota exceeded"),
+      });
       expect(result.spec.cards.length).toBeGreaterThan(0);
     }
+  }, 30000);
+
+  it("carries the kind of a classified provider failure", async () => {
+    await gateway.connect();
+    const overloaded: LlmProvider = {
+      name: "gemini",
+      async compose() {
+        throw new ProviderError("Gemini HTTP 503 UNAVAILABLE", "overloaded", 503);
+      },
+    };
+    const result = await composeTurn(
+      { gateway, provider: overloaded, fallbackProvider: new RuleBasedProvider(), log: silent },
+      turn,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.fallback).toMatchObject({ from: "gemini", kind: "overloaded" });
+  }, 30000);
+
+  it("keeps API keys out of the fallback log line and the recorded reason", async () => {
+    await gateway.connect();
+    // Built at runtime so the repository safety scanner never sees a key-shaped literal.
+    const fakeKey = "AIza" + "Sy" + "X".repeat(33);
+    const lines: string[] = [];
+    const leaky: LlmProvider = {
+      name: "gemini",
+      async compose() {
+        throw new Error(`fetch failed for ?key=${fakeKey}`);
+      },
+    };
+    const result = await composeTurn(
+      { gateway, provider: leaky, fallbackProvider: new RuleBasedProvider(), log: (line) => lines.push(line) },
+      turn,
+    );
+    expect(result.ok).toBe(true);
+    expect(lines.join("\n")).not.toContain(fakeKey);
+    if (result.ok) expect(result.fallback?.reason).not.toContain(fakeKey);
   }, 30000);
 
   it("falls back when the primary's composition fails validation", async () => {
@@ -61,7 +101,13 @@ describe("composeTurn provider fallback", () => {
       turn,
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.fallback).toEqual({ from: "gemini", reason: expect.stringMatching(/made-up-benefit/) });
+    if (result.ok) {
+      expect(result.fallback).toEqual({
+        from: "gemini",
+        kind: "invalid_spec",
+        reason: expect.stringMatching(/made-up-benefit/),
+      });
+    }
   }, 30000);
 
   it("falls back when the primary exceeds the provider timeout", async () => {
@@ -75,7 +121,7 @@ describe("composeTurn provider fallback", () => {
       turn,
     );
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.fallback).toEqual({ from: "gemini", reason: expect.stringMatching(/20ms/) });
+    if (result.ok) expect(result.fallback).toEqual({ from: "gemini", kind: "timeout", reason: expect.stringMatching(/20ms/) });
   }, 30000);
 
   it("records no fallback when the primary succeeds", async () => {

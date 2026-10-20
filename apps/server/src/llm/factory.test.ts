@@ -10,6 +10,16 @@ describe("createProvider (BYOK)", () => {
     expect(createProvider({ GEMINI_API_KEY: "test-key" }).name).toBe("gemini");
   });
 
+  it("passes GEMINI_FALLBACK_MODEL to the Gemini provider", () => {
+    const provider = createProvider({
+      GEMINI_API_KEY: "test-key",
+      GEMINI_MODEL: "primary-model",
+      GEMINI_FALLBACK_MODEL: "backup-model",
+    });
+    expect(provider.name).toBe("gemini");
+    expect(provider).toMatchObject({ model: "primary-model", fallbackModel: "backup-model" });
+  });
+
   it("throws when gemini is requested without a key (no bundled key)", () => {
     expect(() => createProvider({ LLM_PROVIDER: "gemini" })).toThrow(/GEMINI_API_KEY/);
   });

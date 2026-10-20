@@ -5,6 +5,8 @@ export interface ProviderEnv {
   LLM_PROVIDER?: string;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  /** Second Gemini model, tried when GEMINI_MODEL stays overloaded, rate limited, or does not exist. */
+  GEMINI_FALLBACK_MODEL?: string;
 }
 
 /**
@@ -22,7 +24,11 @@ export function createProvider(env: ProviderEnv = process.env): LlmProvider {
           "LLM_PROVIDER=gemini requires GEMINI_API_KEY (free tier: https://aistudio.google.com/apikey)",
         );
       }
-      return new GeminiProvider({ apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL });
+      return new GeminiProvider({
+        apiKey: env.GEMINI_API_KEY,
+        model: env.GEMINI_MODEL || undefined,
+        fallbackModel: env.GEMINI_FALLBACK_MODEL || undefined,
+      });
     }
     case "rule-based":
       return new RuleBasedProvider();
