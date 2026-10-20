@@ -95,7 +95,7 @@ interface InteractiveOptions {
   /** Compose without checklist-a (the candidate's Checklist drops out of this turn). */
   withoutChecklist?: boolean;
   /** Stamped on the composition frame: who composed it. */
-  composedBy?: { provider: string; fallbackFrom?: string };
+  composedBy?: { provider: string; fallbackFrom?: string; fallbackReason?: string };
   /** Returned by /api/session: what the shell is connected to. */
   gateway?: { provider: string; fallbackProvider?: string; dataMode: string; version?: string };
 }
@@ -1248,6 +1248,21 @@ describe("App — interactive catalog", () => {
     await waitFor(() =>
       expect(appStatus()).toHaveTextContent("테스트 의도 문장 Gemini 응답을 받지 못해 규칙 기반으로 구성했습니다."),
     );
+  });
+
+  it.each([
+    ["overloaded", "Gemini 서버가 혼잡해(503) 규칙 기반으로 구성했습니다."],
+    ["rate_limited", "Gemini 요청 한도를 넘어(429) 규칙 기반으로 구성했습니다."],
+    ["timeout", "Gemini 응답이 늦어 규칙 기반으로 구성했습니다."],
+    ["auth", "Gemini 키를 확인할 수 없어 규칙 기반으로 구성했습니다."],
+    ["model_unavailable", "설정한 Gemini 모델을 쓸 수 없어 규칙 기반으로 구성했습니다."],
+    ["invalid_spec", "Gemini 응답 형식이 맞지 않아 규칙 기반으로 구성했습니다."],
+  ])("names the cause when the fallback composed the turn (%s)", async (fallbackReason, sentence) => {
+    interactiveFetch({ composedBy: { provider: "rule-based", fallbackFrom: "gemini", fallbackReason } });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "서울 거주 대학생" }));
+    await waitFor(() => expect(appStatus()).toHaveTextContent(`테스트 의도 문장 ${sentence}`));
   });
 
   it("records checklist ticks as trace events and undoes them with the inverse event", async () => {

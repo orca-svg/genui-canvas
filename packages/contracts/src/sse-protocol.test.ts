@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { CanvasActionSchema, ServerEventSchema, A2uiMessageSchema } from "./sse-protocol.js";
+import { CanvasActionSchema, ServerEventSchema, A2uiMessageSchema, PROVIDER_FAILURE_KINDS } from "./sse-protocol.js";
 
 describe("ServerEventSchema", () => {
+  it("accepts a composition that says which provider composed it and why the fallback took over", () => {
+    const composition = (composedBy: unknown) =>
+      ServerEventSchema.safeParse({ kind: "composition", compositionId: "comp3", messages: [], cards: [], composedBy }).success;
+    expect(composition({ provider: "gemini" })).toBe(true);
+    expect(composition({ provider: "rule-based", fallbackFrom: "gemini", fallbackReason: "overloaded" })).toBe(true);
+    for (const reason of PROVIDER_FAILURE_KINDS) {
+      expect(composition({ provider: "rule-based", fallbackFrom: "gemini", fallbackReason: reason })).toBe(true);
+    }
+    expect(composition({ provider: "rule-based", fallbackFrom: "gemini", fallbackReason: "quota exceeded for key x" })).toBe(false);
+  });
+
   it("accepts a status event", () => {
     expect(ServerEventSchema.safeParse({ kind: "status", message: "searchBenefits 호출 중" }).success).toBe(true);
   });

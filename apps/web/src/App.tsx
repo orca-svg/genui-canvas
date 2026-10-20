@@ -23,6 +23,7 @@ import {
   CanvasActionSchema,
   type CompositionCard,
   type InteractionEvent,
+  type ProviderFailureKind,
 } from "@genui-canvas/contracts";
 import {
   SequenceConflictError,
@@ -211,10 +212,25 @@ function gatewayNotice(gateway: GatewayInfo | null): string {
   return `현재 ${withParticle(subject, "은/는")} ${data}를 제공하고 추천 구성은 ${composer}.${fixture ? " 실제 정책 데이터가 아닙니다." : ""}`;
 }
 
+/** Why the configured composer was replaced, phrased as the cause clause of the status sentence. */
+const FALLBACK_CAUSE: Partial<Record<ProviderFailureKind, (from: string) => string>> = {
+  overloaded: (from) => `${from} 서버가 혼잡해(503)`,
+  rate_limited: (from) => `${from} 요청 한도를 넘어(429)`,
+  timeout: (from) => `${from} 응답이 늦어`,
+  auth: (from) => `${from} 키를 확인할 수 없어`,
+  model_unavailable: (from) => `설정한 ${from} 모델을 쓸 수 없어`,
+  invalid_response: (from) => `${from} 응답 형식이 맞지 않아`,
+  invalid_spec: (from) => `${from} 응답 형식이 맞지 않아`,
+};
+
 /** Appended to the composition summary when the fallback provider composed the turn. */
-function fallbackNote(composedBy: { provider: string; fallbackFrom?: string } | undefined): string {
+function fallbackNote(
+  composedBy: { provider: string; fallbackFrom?: string; fallbackReason?: ProviderFailureKind } | undefined,
+): string {
   if (!composedBy?.fallbackFrom) return "";
-  return ` ${providerLabel(composedBy.fallbackFrom)} 응답을 받지 못해 ${providerLabel(composedBy.provider)}으로 구성했습니다.`;
+  const from = providerLabel(composedBy.fallbackFrom);
+  const cause = composedBy.fallbackReason ? FALLBACK_CAUSE[composedBy.fallbackReason] : undefined;
+  return ` ${cause ? cause(from) : `${from} 응답을 받지 못해`} ${providerLabel(composedBy.provider)}으로 구성했습니다.`;
 }
 
 export function App() {

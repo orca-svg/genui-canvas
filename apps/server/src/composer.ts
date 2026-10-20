@@ -7,12 +7,19 @@ import {
   type CompositionSpec,
   type CompositionTrigger,
   type GatewayToolName,
+  type ProviderFailureKind,
   type ToolCallSummary,
   type TraceSummary,
   type UserProfile,
 } from "@genui-canvas/contracts";
 import type { GatewayClient } from "./mcp/gateway-client.js";
-import type { ComposeCandidate, ComposeResource, LlmProvider } from "./llm/provider.js";
+import {
+  ProviderError,
+  redactSecrets,
+  type ComposeCandidate,
+  type ComposeResource,
+  type LlmProvider,
+} from "./llm/provider.js";
 import { ToolResultCache } from "./composition/tool-cache.js";
 import { validateComposition } from "./composition/validate.js";
 import { enforceManipulationInvariants } from "./composition/enforce.js";
@@ -32,6 +39,9 @@ export interface ComposerDeps {
 /** Why `fallbackProvider` composed a turn instead of `provider`. */
 export interface TurnFallback {
   from: string;
+  /** Classified cause; the shell turns it into its status sentence. */
+  kind: ProviderFailureKind;
+  /** Redacted detail for the operator's log, never sent to the browser. */
   reason: string;
 }
 
@@ -252,22 +262,23 @@ async function composeWithFallback(
   if (primary.ok) return { ok: true, validation: primary.validation };
   const fallbackTo = deps.fallbackProvider;
   if (!fallbackTo) {
-    if (primary.kind === "threw") throw primary.error;
+    if (primary.outcome === "threw") throw primary.error;
     return { ok: false, errors: primary.errors };
   }
+  const reason = redactSecrets(primary.reason);
   const log = deps.log ?? ((message: string) => console.error(message));
   log(
-    `[genui-canvas] ${deps.provider.name} provider failed (${primary.reason}); composing with ${fallbackTo.name} instead`,
+    `[genui-canvas] ${deps.provider.name} provider failed (${primary.kind}: ${reason}); composing with ${fallbackTo.name} instead`,
   );
   const validation = validateComposition(await fallbackTo.compose(request), cache);
   if (!validation.ok) return { ok: false, errors: validation.errors };
-  return { ok: true, validation, fallback: { from: deps.provider.name, reason: primary.reason } };
+  return { ok: true, validation, fallback: { from: deps.provider.name, kind: primary.kind, reason } };
 }
 
 type PrimaryOutcome =
   | { ok: true; validation: ValidatedSpec }
-  | { ok: false; kind: "threw"; reason: string; errors: string[]; error: unknown }
-  | { ok: false; kind: "invalid"; reason: string; errors: string[] };
+  | { ok: false; outcome: "threw"; kind: ProviderFailureKind; reason: string; errors: string[]; error: unknown }
+  | { ok: false; outcome: "invalid"; kind: "invalid_spec"; reason: string; errors: string[] };
 
 async function attemptPrimary(
   deps: ComposerDeps,
@@ -282,17 +293,24 @@ async function attemptPrimary(
     );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, kind: "threw", reason, errors: [reason], error };
+    const kind: ProviderFailureKind = error instanceof ProviderError ? error.kind : "error";
+    return { ok: false, outcome: "threw", kind, reason, errors: [reason], error };
   }
   const validation = validateComposition(raw, cache);
   if (validation.ok) return { ok: true, validation };
-  return { ok: false, kind: "invalid", reason: validation.errors.join(" · "), errors: validation.errors };
+  return {
+    ok: false,
+    outcome: "invalid",
+    kind: "invalid_spec",
+    reason: validation.errors.join(" · "),
+    errors: validation.errors,
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`provider timed out after ${ms}ms`)), ms);
+    timer = setTimeout(() => reject(new ProviderError(`provider timed out after ${ms}ms`, "timeout")), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

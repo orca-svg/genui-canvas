@@ -2,6 +2,7 @@ import type {
   CatalogComponentType,
   CompositionContext,
   EntityRef,
+  ProviderFailureKind,
 } from "@genui-canvas/contracts";
 
 export interface ComposeCandidate {
@@ -32,6 +33,34 @@ export interface ComposeRequest {
 export interface LlmProvider {
   readonly name: string;
   compose(request: ComposeRequest): Promise<unknown>;
+}
+
+/**
+ * A provider failure with a classified cause, so the composer can say why it
+ * fell back without parsing provider-specific messages. The message is
+ * already passed through `redactSecrets`.
+ */
+export class ProviderError extends Error {
+  constructor(
+    message: string,
+    readonly kind: ProviderFailureKind,
+    readonly status?: number,
+  ) {
+    super(redactSecrets(message));
+    this.name = "ProviderError";
+  }
+}
+
+/**
+ * Masks anything that looks like an API key before it reaches a log line or a
+ * recorded reason: Google keys (`AIza…`), `key=` / `api_key=` query or form
+ * values, and bearer tokens.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[redacted-key]")
+    .replace(/((?:api[_-]?)?key=)[^\s&"']+/gi, "$1[redacted]")
+    .replace(/(bearer\s+)[0-9A-Za-z._~+/-]+=*/gi, "$1[redacted]");
 }
 
 type RawCard = {

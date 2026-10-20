@@ -152,6 +152,27 @@ export type CompositionCard = z.infer<typeof CompositionCardSchema>;
 /** Sequence the client must use for its next trace event; the server always sets it. */
 const NextSeqSchema = z.number().int().nonnegative().optional();
 
+/**
+ * Why a fallback provider composed a turn instead of the configured one.
+ * overloaded = HTTP 5xx after retries · rate_limited = HTTP 429 after retries ·
+ * auth = the key was refused · model_unavailable = the model name does not
+ * exist for the key · invalid_response = the answer was not JSON ·
+ * timeout = no answer within the composer's limit · invalid_spec = JSON that
+ * failed CompositionSpec validation · error = anything else.
+ */
+export const PROVIDER_FAILURE_KINDS = [
+  "overloaded",
+  "rate_limited",
+  "auth",
+  "model_unavailable",
+  "invalid_response",
+  "timeout",
+  "invalid_spec",
+  "error",
+] as const;
+export const ProviderFailureKindSchema = z.enum(PROVIDER_FAILURE_KINDS);
+export type ProviderFailureKind = z.infer<typeof ProviderFailureKindSchema>;
+
 /** Server → web stream events. */
 export const ServerEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("status"), message: z.string().max(500) }).strict(),
@@ -165,7 +186,11 @@ export const ServerEventSchema = z.discriminatedUnion("kind", [
       nextSeq: NextSeqSchema,
       /** Which provider composed this turn; `fallbackFrom` names the one that failed first. */
       composedBy: z
-        .object({ provider: z.string().max(100), fallbackFrom: z.string().max(100).optional() })
+        .object({
+          provider: z.string().max(100),
+          fallbackFrom: z.string().max(100).optional(),
+          fallbackReason: ProviderFailureKindSchema.optional(),
+        })
         .strict()
         .optional(),
     })

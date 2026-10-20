@@ -19,6 +19,7 @@ import {
   type ServerEvent,
 } from "@genui-canvas/contracts";
 import { composeTurn, type ComposerDeps, type TurnRequest } from "./composer.js";
+import { redactSecrets } from "./llm/provider.js";
 import { GATEWAY_REPOSITORY_MODE, GatewayCompatibilityError } from "./mcp/gateway-client.js";
 import { summarizeTrace } from "./trace/summarize.js";
 import type { TraceStore } from "./trace/store.js";
@@ -236,9 +237,14 @@ export function createApp(deps: AppDeps) {
               ...metadataByCardId.get(card.cardId),
             })),
             nextSeq: session.seq,
+            // Only the classified kind crosses the wire; the redacted detail stays in the log.
             composedBy:
               result.fallback && deps.fallbackProvider
-                ? { provider: deps.fallbackProvider.name, fallbackFrom: result.fallback.from }
+                ? {
+                    provider: deps.fallbackProvider.name,
+                    fallbackFrom: result.fallback.from,
+                    fallbackReason: result.fallback.kind,
+                  }
                 : { provider: deps.provider.name },
           };
           await stream.writeSSE({ event: "composition", data: serverEventData(compositionEvent) });
@@ -249,9 +255,11 @@ export function createApp(deps: AppDeps) {
           });
         }
       } catch (error) {
-        // The frame below is deliberately generic; the operator's log keeps the cause.
+        // The frame below is deliberately generic; the operator's log keeps the
+        // cause, with anything key-shaped masked first.
+        const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
         // eslint-disable-next-line no-console
-        console.error("[genui-canvas] turn failed:", error);
+        (deps.log ?? ((line: string) => console.error(line)))(`[genui-canvas] turn failed: ${redactSecrets(detail)}`);
         await stream.writeSSE({
           event: "error",
           data: serverEventData({
